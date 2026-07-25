@@ -1,0 +1,86 @@
+{
+  "settlement_source": "stock-sdk-mcp get_history_kline qfq",
+  "init_date": "2026-05-29",
+  "init_weights": {
+    "300308": 0.2,
+    "002463": 0.25,
+    "512480": 0.25,
+    "601288": 0.1,
+    "cash": 0.2
+  },
+  "trades": [
+    {
+      "date": "2026-06-02",
+      "action": "BUY",
+      "symbol": "512480",
+      "amount": 96608.46076131664,
+      "reason": "§2.3 早盘杀跌低吸 / 主线仍在 (§3); prior-day 6/1 dip"
+    },
+    {
+      "date": "2026-06-18",
+      "action": "SELL",
+      "symbol": "300308",
+      "amount": 54564.45295986629,
+      "reason": "§2.8 高潮区兑现加仓层; prior 6/15-17 steep advance"
+    },
+    {
+      "date": "2026-06-26",
+      "action": "SELL",
+      "symbol": "002463",
+      "amount": 58768.125669332876,
+      "reason": "§2.8 高潮后波动加大, 继续降高弹性加仓层"
+    },
+    {
+      "date": "2026-07-02",
+      "action": "SELL",
+      "symbol": "300308",
+      "amount": 151278.05759236513,
+      "reason": "§2.8 高潮失效离场 (prior 7/1 weakness after 6/30 climax) + 禁止同风格后排接回"
+    },
+    {
+      "date": "2026-07-02",
+      "action": "SELL",
+      "symbol": "002463",
+      "amount": 195033.71348572723,
+      "reason": "§2.8 高潮失效离场 (prior 7/1 weakness after 6/30 climax) + 禁止同风格后排接回"
+    },
+    {
+      "date": "2026-07-02",
+      "action": "SELL",
+      "symbol": "512480",
+      "amount": 437905.2134882476,
+      "reason": "§2.8 高潮失效离场 (prior 7/1 weakness after 6/30 climax) + 禁止同风格后排接回"
+    },
+    {
+      "date": "2026-07-02",
+      "action": "BUY",
+      "symbol": "601288",
+      "amount": 350329.38585197786,
+      "reason": "§2.3 降波动率买防御 / §5.1 混沌防守跨风格切换"
+    },
+    {
+      "date": "2026-07-02",
+      "action": "BUY",
+      "symbol": "601318",
+      "amount": 350329.38585197786,
+      "reason": "§2.3 降波动率买防御 / §5.1 混沌防守跨风格切换"
+    }
+  ],
+  "june": {
+    "end_date": "2026-06-30",
+    "nav": 1196733.4392979944,
+    "return_pct": 19.67,
+    "vs_init": true
+  },
+  "july": {
+    "end_date": "2026-07-24",
+    "nav": 1182680.118610201,
+    "return_pct": -1.17,
+    "base": "2026-06-30 nav"
+  },
+  "pass_nonneg": false,
+  "buy_hold_contrast": {
+    "june_pct": 15.2,
+    "july_pct": -17.04
+  }
+}

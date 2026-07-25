@@ -1,0 +1,47 @@
+{
+  "training_observations": {
+    "sh_mom": {
+      "202601": 2.35,
+      "202602": 1.09,
+      "202603": -6.51,
+      "202604": 5.66,
+      "202605": -1.06
+    },
+    "cy_mom": {
+      "202601": 1.57,
+      "202602": -1.08,
+      "202603": -3.79,
+      "202604": 15.45,
+      "202605": 9.81
+    },
+    "semi_etf_mom": {
+      "202601": 11.9,
+      "202602": -1.52,
+      "202603": -16.01,
+      "202604": 28.39,
+      "202605": 18.81
+    },
+    "lessons": [
+      "March 2026: high-beta (semi) deep drawdown while banks relatively resilient → cross-style defense matters",
+      "Apr-May: parabolic high-beta advance → need climax profit-taking discipline",
+      "Chaos months: default 躺平 / cut beta rather than average down same chain"
+    ]
+  },
+  "test_index_mom": {
+    "202606": {
+      "sh": 0.63,
+      "cy": 7.55,
+      "semi_etf": 39.17,
+      "hs300": 1.95,
+      "gold": -10.84
+    },
+    "202607": {
+      "sh": -6.84,
+      "cy": -19.85,
+      "semi_etf": -25.95,
+      "hs300": -6.34,
+      "gold": 0.08,
+      "bank_industry_approx": 9.5
+    }
+  }
+}
