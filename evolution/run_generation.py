@@ -1030,7 +1030,7 @@ def main() -> None:
             encoding="utf-8",
         )
         win["现任基因版本"] = new_version
-    else:
+    elif not checker_blocks:
         if not any(r.get("可晋级") for r in rows if not r.get("拒收")):
             decision = "保持现任（无候选过历史分/回撤/压力月门槛）"
 
