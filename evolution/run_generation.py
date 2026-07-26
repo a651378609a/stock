@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""一代策略基因进化：检查器 → 突变 → 盲测回放 → 实盘加权 → 晋级/保持 → 右移。"""
+"""一代策略基因进化：检查器 → 突变 → 盲测回放 → 压力月 → 晋级/保持 → 右移。"""
 
 from __future__ import annotations
 
@@ -34,6 +34,8 @@ EPS_DD = 0.10
 W_LIVE = 0.70
 W_HIST = 0.30
 INIT_CASH = 1_000_000.0
+STRESS_MONTHS = [("2026-04", "2026-04-01", "2026-04-30"), ("2026-07", "2026-07-01", "2026-07-31")]
+STRESS_DD_CAP = 0.25
 
 # 回测角色代理（仅评估器内部；不得写入策略基因规则层）
 PROXY = {
@@ -93,8 +95,76 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def parse_v0_genome() -> GenomeParams:
-    return GenomeParams(version="v0").clamp()
+def _float_after(text: str, label: str, default: float) -> float:
+    m = re.search(rf"{re.escape(label)}[：:]\s*([0-9]+(?:\.[0-9]+)?)", text)
+    return float(m.group(1)) if m else default
+
+
+def _int_after(text: str, label: str, default: int) -> int:
+    m = re.search(rf"{re.escape(label)}[：:]\s*([0-9]+)", text)
+    return int(m.group(1)) if m else default
+
+
+def _range_after(text: str, label: str, default: tuple[float, float]) -> tuple[float, float]:
+    m = re.search(rf"{re.escape(label)}[：:]\s*([0-9.]+)\s*[–\-]\s*([0-9.]+)", text)
+    return (float(m.group(1)), float(m.group(2))) if m else default
+
+
+def _bool_after(text: str, label: str, default: bool, true_tok: str = "是") -> bool:
+    m = re.search(rf"{re.escape(label)}[：:]\s*(\S+)", text)
+    if not m:
+        return default
+    return m.group(1).startswith(true_tok) or m.group(1) == "开"
+
+
+def parse_genome() -> GenomeParams:
+    text = GENOME_PATH.read_text(encoding="utf-8")
+    ver_m = re.search(r"^version:\s*(\S+)", text, re.M)
+    version = ver_m.group(1) if ver_m else "v0"
+    g = GenomeParams(version=version)
+    g.cash_lo = _float_after(text, "现金 |", g.cash_lo)
+    # 表格行：| 现金 | 0.05 | 1.00 |
+    m_cash = re.search(r"\|\s*现金\s*\|\s*([0-9.]+)\s*\|\s*([0-9.]+)", text)
+    if m_cash:
+        g.cash_lo = float(m_cash.group(1))
+    m_off = re.search(r"\|\s*主线进攻\s*\|\s*([0-9.]+)\s*\|\s*([0-9.]+)", text)
+    if m_off:
+        g.offense_hi = float(m_off.group(2))
+    m_sec = re.search(r"\|\s*次线配置\s*\|\s*([0-9.]+)\s*\|\s*([0-9.]+)", text)
+    if m_sec:
+        g.secondary_hi = float(m_sec.group(2))
+    m_def = re.search(r"\|\s*防御\s*\|\s*([0-9.]+)\s*\|\s*([0-9.]+)", text)
+    if m_def:
+        g.defense_hi = float(m_def.group(2))
+    m_cyc = re.search(r"\|\s*周期\s*\|\s*([0-9.]+)\s*\|\s*([0-9.]+)", text)
+    if m_cyc:
+        g.cycle_hi = float(m_cyc.group(2))
+    m_tool = re.search(r"\|\s*工具[^\|]*\|\s*([0-9.]+)\s*\|\s*([0-9.]+)", text)
+    if m_tool:
+        g.tool_hi = float(m_tool.group(2))
+
+    g.trend_pos = _range_after(text, "趋势上行总仓", g.trend_pos)
+    g.range_pos = _range_after(text, "震荡轮动总仓", g.range_pos)
+    g.chaos_pos = _range_after(text, "混沌期总仓", g.chaos_pos)
+
+    m_open = re.search(r"\|\s*新开底仓\s*\|\s*([0-9.]+)", text)
+    if m_open:
+        g.open_step = float(m_open.group(1))
+
+    g.stop_from_peak = _float_after(text, "自高点强制止损", g.stop_from_peak)
+    g.warn_from_peak = _float_after(text, "自高点预警", g.warn_from_peak)
+    m_crash = re.search(r"连续\s*2\s*日累计跌幅\s*>\s*([0-9.]+)", text)
+    if m_crash:
+        g.two_day_crash = float(m_crash.group(1))
+    g.outflow_days = _int_after(text, "主题流出退出天数", g.outflow_days)
+    g.abandon_weeks = _int_after(text, "主题放弃周数", g.abandon_weeks)
+    g.chase_breakout = _bool_after(text, "追涨延伸突破", False, true_tok="开")
+    g.min_rr = _float_after(text, "试错最低盈亏比", g.min_rr)
+    g.catalyst_hits = _int_after(text, "催化最少命中数", g.catalyst_hits)
+    g.max_sells_day = _int_after(text, "无独立动机时单日最多清/减只数", g.max_sells_day)
+    g.prefer_divergence = _bool_after(text, "偏好分歧尾盘试错", True)
+    g.chaos_low_activity = _bool_after(text, "混沌期尽量少动", True)
+    return g.clamp()
 
 
 def load_panel() -> pd.DataFrame:
@@ -114,23 +184,19 @@ def load_panel() -> pd.DataFrame:
         )
         frames.append(df.set_index("date")[[c for c in df.columns if c.startswith(role)]])
     panel = pd.concat(frames, axis=1, join="inner").sort_index()
-    # 仅用已收盘完整日；开放中的今日不进入盲测
     today = datetime.now(timezone.utc).date()
     panel = panel[panel.index.date < today]
     return panel
 
 
 def last_closed_month_end(last_data_day: date) -> date:
-    """最近已封闭自然月终点（该月全部交易日均已落在数据内）。"""
     y, m = last_data_day.year, last_data_day.month
-    # 若 last_data_day 不是该月最后日历日，则上一自然月才算封闭
     if last_data_day.month == 12:
         next_month = date(y + 1, 1, 1)
     else:
         next_month = date(y, m + 1, 1)
     month_calendar_end = next_month - timedelta(days=1)
     if last_data_day < month_calendar_end:
-        # 回退一个月
         if m == 1:
             return date(y - 1, 12, 31)
         first = date(y, m, 1)
@@ -138,23 +204,7 @@ def last_closed_month_end(last_data_day: date) -> date:
     return month_calendar_end
 
 
-def add_months(d: date, months: int) -> date:
-    m0 = d.month - 1 + months
-    y = d.year + m0 // 12
-    m = m0 % 12 + 1
-    if m == 12:
-        nxt = date(y + 1, 1, 1)
-    else:
-        nxt = date(y, m + 1, 1)
-    return nxt - timedelta(days=1)
-
-
-def month_start(d: date) -> date:
-    return date(d.year, d.month, 1)
-
-
 def window_from_evol_start(e0: date) -> tuple[date, date, date, date]:
-    """进化段约 24 个自然月，随后盲测 6 个自然月。"""
     e1 = date(e0.year + 2, e0.month, 1) - timedelta(days=1)
     b0 = date(e0.year + 2, e0.month, 1)
     bm = b0.month - 1 + 5
@@ -168,10 +218,13 @@ def window_from_evol_start(e0: date) -> tuple[date, date, date, date]:
 
 
 def shift_evol_start(e0: date, months: int = 6) -> date:
-    """按自然月平移月初日期（支持负偏移）。"""
     idx = e0.year * 12 + (e0.month - 1) + months
     year, month0 = divmod(idx, 12)
     return date(year, month0 + 1, 1)
+
+
+def month_start(d: date) -> date:
+    return date(d.year, d.month, 1)
 
 
 def init_or_load_window(panel: pd.DataFrame) -> dict[str, Any]:
@@ -182,14 +235,11 @@ def init_or_load_window(panel: pd.DataFrame) -> dict[str, Any]:
     first = panel.index.min().date()
     last = panel.index.max().date()
     closed_end = last_closed_month_end(last)
-
-    # 锚定最近已封闭月终点为盲测止：盲测=含该月在内的 6 个自然月，之前 24 个月为进化段
     b1 = closed_end
     b0 = shift_evol_start(date(b1.year, b1.month, 1), -5)
     e0 = shift_evol_start(b0, -24)
     e1 = b0 - timedelta(days=1)
     if e0 < month_start(first) or len(panel.loc[str(b0) : str(b1)]) < 20:
-        # 回退：自数据最早月正向滚动到不超过封闭终点的最后合法窗
         evol_start = month_start(first)
         last_ok = None
         while True:
@@ -260,7 +310,6 @@ def checker() -> dict[str, Any]:
     issues = []
     if "冻结执行壳" not in skill and "自进化多头技能" not in skill:
         issues.append("skill.md 壳标识异常")
-    # 壳哈希存档比对（若存在）
     hash_path = EVOL / "skill_shell.sha256"
     h = hashlib.sha256(skill.encode("utf-8")).hexdigest()
     if hash_path.exists():
@@ -274,13 +323,11 @@ def checker() -> dict[str, Any]:
         if re.search(pat, genome):
             issues.append(f"策略基因含违禁点名模式: {pat}")
 
-    # 细分行业/概念固定偏好粗检
     bad_phrases = ["永远优先", "固定超配", "只买", "永不满仓某", "专做"]
     for p in bad_phrases:
         if p in genome:
             issues.append(f"疑似非法偏好措辞: {p}")
 
-    # 禁止条款/非法列表示例会提到「盲测段…涨跌」，仅在非约束语境下报警
     in_illegal_section = False
     for line in genome.splitlines():
         if "非法突变" in line or "检查器拒收" in line:
@@ -302,7 +349,6 @@ def checker() -> dict[str, Any]:
 def latest_live_files() -> dict[str, list[str]]:
     refs = sorted([p.name for p in (EVOL / "live_reflections").glob("*.md")])
     props = sorted([p.name for p in (EVOL / "live_proposals").glob("*.md")])
-    # 忽略 gitkeep
     refs = [x for x in refs if not x.startswith(".")]
     props = [x for x in props if not x.startswith(".")]
     return {"反思": refs[-5:], "提案": props[-5:]}
@@ -326,22 +372,30 @@ def max_drawdown(equity: list[float]) -> float:
     return mdd
 
 
+def empty_bt() -> dict[str, float]:
+    return {
+        "总收益": 0.0,
+        "年化": 0.0,
+        "最大回撤": 0.0,
+        "交易日数": 0.0,
+        "期末权益": INIT_CASH,
+        "成交次数": 0.0,
+        "风控触发次数": 0.0,
+        "硬顶触发次数": 0.0,
+        "有样本": 0.0,
+    }
+
+
 def backtest(panel: pd.DataFrame, g: GenomeParams, start: str, end: str) -> dict[str, float]:
     seg = panel.loc[start:end].copy()
-    if len(seg) < 5:
-        return {
-            "总收益": 0.0,
-            "年化": 0.0,
-            "最大回撤": 1.0,
-            "交易日数": float(len(seg)),
-            "期末权益": INIT_CASH,
-        }
+    if len(seg) < 1:
+        return empty_bt()
 
-    # 进化段特征仅用于信号标定的前置指标；评分窗口仍只用盲测段成交
-    # 为计算均线，向前多取 120 日（不把前置段计入权益）
     idx = panel.index
     start_ts = pd.Timestamp(start)
     warm_idx = idx[idx <= start_ts]
+    if len(warm_idx) == 0:
+        return empty_bt()
     warm_start = warm_idx[-120] if len(warm_idx) >= 120 else warm_idx[0]
     full = panel.loc[warm_start:end].copy()
 
@@ -350,45 +404,38 @@ def backtest(panel: pd.DataFrame, g: GenomeParams, start: str, end: str) -> dict
     ma60 = base_close.rolling(60).mean()
     vol20 = base_close.pct_change().rolling(20).std()
 
-    # 持仓：角色代理权重（占净值）
     weights = {"进攻": 0.0, "次线": 0.0, "防御": 0.0, "工具": 0.0}
     peak_px = {k: np.nan for k in weights}
-    entry_ready = False
     cash_w = 1.0
     equity = INIT_CASH
-    eq_curve: list[float] = []
-    pending: dict[str, float] | None = None  # T 信号 → T+1 开盘目标权重
+    pending: dict[str, float] | None = None
 
     dates = list(full.index)
     in_blind = False
     blind_eq: list[float] = []
     trade_count = 0
+    risk_triggers = 0
+    hardcap_triggers = 0
 
     for i, dt in enumerate(dates):
         row = full.loc[dt]
         dstr = str(dt.date())
         if dstr >= start:
             in_blind = True
-            entry_ready = True
 
-        # 先按 T+1 开盘执行昨信号
         if pending is not None and in_blind and i > 0:
             target = pending
-            # 以开盘价调仓，计成本
             turnover = 0.0
             for k in weights:
                 turnover += abs(target.get(k, 0.0) - weights[k])
-            # 单日单向合计硬顶 30%
             if turnover / 2 > 0.30:
+                hardcap_triggers += 1
                 scale = 0.30 / (turnover / 2)
                 for k in weights:
                     weights[k] = weights[k] + (target[k] - weights[k]) * scale
             else:
                 weights = {k: float(target[k]) for k in weights}
             cash_w = max(0.0, 1.0 - sum(weights.values()))
-            # 成本：双边佣金+滑点；卖出部分另计印花税（近似用减仓绝对值）
-            sell_amt = sum(max(0.0, - (target[k] - weights[k])) for k in weights)  # after assign rough
-            # 更稳：用 turnover
             cost = equity * (turnover * (COMMISSION + SLIPPAGE) + 0.5 * turnover * STAMP_SELL)
             equity = max(1.0, equity - cost)
             trade_count += 1
@@ -397,7 +444,6 @@ def backtest(panel: pd.DataFrame, g: GenomeParams, start: str, end: str) -> dict
                 if weights[k] > 0:
                     peak_px[k] = row[f"{k}_open"] if np.isnan(peak_px[k]) else max(peak_px[k], row[f"{k}_open"])
 
-        # 当日盈亏：用角色代理日收益（开→收近似用 close/close 前，执行后用当日收益）
         if in_blind and i > 0:
             prev = full.loc[dates[i - 1]]
             day_ret = 0.0
@@ -412,10 +458,8 @@ def backtest(panel: pd.DataFrame, g: GenomeParams, start: str, end: str) -> dict
                     peak_px[k] = row[f"{k}_close"] if np.isnan(peak_px[k]) else max(peak_px[k], row[f"{k}_close"])
 
         if in_blind:
-            eq_curve.append(equity)
             blind_eq.append(equity)
 
-        # 生成信号（仅盲测段；进化段不算分）
         if not in_blind or i >= len(dates) - 1:
             continue
         if pd.isna(ma20.loc[dt]) or pd.isna(ma60.loc[dt]):
@@ -439,7 +483,6 @@ def backtest(panel: pd.DataFrame, g: GenomeParams, start: str, end: str) -> dict
         if g.chaos_low_activity and regime == "混沌":
             target_gross = min(target_gross, g.chaos_pos[1])
 
-        # 资金连续性代理：基准近 N 日涨跌与波动
         rets = base_close.pct_change()
         recent = rets.loc[:dt].tail(g.outflow_days)
         weak = bool((recent < 0).sum() >= max(1, g.outflow_days - 1))
@@ -461,7 +504,6 @@ def backtest(panel: pd.DataFrame, g: GenomeParams, start: str, end: str) -> dict
             dfn = min(g.defense_hi, max(0.0, target_gross - sec - tool))
             tgt.update({"次线": sec, "工具": tool, "防御": dfn})
 
-        # 风控：自高点回撤
         for k in list(tgt):
             px = row[f"{k}_close"]
             pk = peak_px[k]
@@ -469,26 +511,29 @@ def backtest(panel: pd.DataFrame, g: GenomeParams, start: str, end: str) -> dict
                 dd = (pk - px) / pk
                 if dd >= g.stop_from_peak:
                     tgt[k] = 0.0
+                    risk_triggers += 1
                 elif dd >= g.warn_from_peak:
                     tgt[k] = min(tgt[k], g.open_step)
+                    risk_triggers += 1
 
-        # 两日暴跌
         if i >= 2:
             for k in tgt:
                 p0 = full.loc[dates[i - 2], f"{k}_close"]
                 p1 = row[f"{k}_close"]
                 if p0 > 0 and (p0 - p1) / p0 > g.two_day_crash:
                     tgt[k] = 0.0
+                    risk_triggers += 1
 
-        # 硬顶：总仓 ≤ 0.95，单票（角色代理）≤ 0.20
         for k in tgt:
+            if tgt[k] > 0.20:
+                hardcap_triggers += 1
             tgt[k] = min(tgt[k], 0.20)
         s = sum(tgt.values())
         if s > 0.95:
+            hardcap_triggers += 1
             for k in tgt:
                 tgt[k] *= 0.95 / s
 
-        # 步长：向目标靠拢不超过 open_step 量级（组合层）
         cur = weights
         delta_sum = sum(abs(tgt[k] - cur[k]) for k in tgt)
         max_step = max(g.open_step * 3, 0.15)
@@ -496,7 +541,6 @@ def backtest(panel: pd.DataFrame, g: GenomeParams, start: str, end: str) -> dict
             for k in tgt:
                 tgt[k] = cur[k] + (tgt[k] - cur[k]) * (max_step / delta_sum)
 
-        # 现金下限
         gross = sum(tgt.values())
         if 1.0 - gross < g.cash_lo:
             scale = max(0.0, 1.0 - g.cash_lo) / max(gross, 1e-9)
@@ -506,13 +550,9 @@ def backtest(panel: pd.DataFrame, g: GenomeParams, start: str, end: str) -> dict
         pending = tgt
 
     if not blind_eq:
-        return {
-            "总收益": 0.0,
-            "年化": 0.0,
-            "最大回撤": 1.0,
-            "交易日数": 0.0,
-            "期末权益": INIT_CASH,
-        }
+        out = empty_bt()
+        out["交易日数"] = float(len(seg))
+        return out
 
     total_ret = blind_eq[-1] / INIT_CASH - 1.0
     n = len(blind_eq)
@@ -523,111 +563,192 @@ def backtest(panel: pd.DataFrame, g: GenomeParams, start: str, end: str) -> dict
         "交易日数": float(n),
         "期末权益": float(blind_eq[-1]),
         "成交次数": float(trade_count),
+        "风控触发次数": float(risk_triggers),
+        "硬顶触发次数": float(hardcap_triggers),
+        "有样本": 1.0,
     }
 
 
-def live_score(scorecard: dict[str, Any]) -> tuple[float, str]:
+def stress_available(panel: pd.DataFrame, start: str, end: str) -> bool:
+    seg = panel.loc[start:end]
+    return len(seg) >= 3
+
+
+def eval_stress_months(panel: pd.DataFrame, g: GenomeParams) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for label, s, e in STRESS_MONTHS:
+        if not stress_available(panel, s, e):
+            out[label] = {
+                "可得": False,
+                "扣成本收益": None,
+                "最大回撤": None,
+                "交易次数": None,
+                "风控触发次数": None,
+                "硬顶触发次数": None,
+                "交易日数": 0,
+            }
+            continue
+        bt = backtest(panel, g, s, e)
+        out[label] = {
+            "可得": True,
+            "扣成本收益": bt["总收益"],
+            "最大回撤": bt["最大回撤"],
+            "交易次数": int(bt["成交次数"]),
+            "风控触发次数": int(bt["风控触发次数"]),
+            "硬顶触发次数": int(bt["硬顶触发次数"]),
+            "交易日数": int(bt["交易日数"]),
+        }
+    return out
+
+
+def stress_gate_ok(
+    cand_stress: dict[str, Any],
+    base_stress: dict[str, Any],
+    dd_cap: float = STRESS_DD_CAP,
+) -> tuple[bool, str]:
+    notes = []
+    ok = True
+    for label, _, _ in STRESS_MONTHS:
+        c = cand_stress.get(label) or {}
+        b = base_stress.get(label) or {}
+        if not c.get("可得"):
+            notes.append(f"{label}:数据不可得,跳过")
+            continue
+        c_dd = float(c["最大回撤"])
+        if not b.get("可得") or b.get("最大回撤") is None or int(b.get("交易日数") or 0) == 0:
+            if c_dd > dd_cap + 1e-12:
+                ok = False
+                notes.append(f"{label}:现任无样本,候选回撤{c_dd:.4f}>{dd_cap:.2f}")
+            else:
+                notes.append(f"{label}:现任无样本,候选回撤{c_dd:.4f}≤{dd_cap:.2f}")
+        else:
+            limit = float(b["最大回撤"]) * (1 + EPS_DD)
+            if c_dd > limit + 1e-12:
+                ok = False
+                notes.append(f"{label}:候选回撤{c_dd:.4f}>现任×1.10={limit:.4f}")
+            else:
+                notes.append(f"{label}:回撤过线")
+    return ok, "; ".join(notes)
+
+
+def live_score(scorecard: dict[str, Any], min_days: int) -> tuple[float | None, str, bool]:
     days = int(scorecard.get("交易日数") or 0)
-    if days <= 0 or scorecard.get("扣成本年化") is None:
-        return 0.0, "实盘样本为空：实盘分记 0（偏保守，不晋级）"
+    if days < min_days or scorecard.get("扣成本年化") is None:
+        return None, "未就绪", False
     ann = float(scorecard["扣成本年化"])
     viol = int(scorecard.get("违规次数") or 0)
     score = ann - 0.05 * viol
-    return score, f"任期内年化={ann:.4f}，违规={viol}"
+    return score, f"任期内年化={ann:.4f}，违规={viol}", True
 
 
-def mutate_candidates(base: GenomeParams, live_meta: dict[str, list[str]]) -> list[dict[str, Any]]:
-    """至少 3/5 响应实盘；至多 2/5 纯历史。无提案时响应空样本保本金主题。"""
+def mutate_candidates(
+    base: GenomeParams,
+    live_meta: dict[str, list[str]],
+    pure_history: bool,
+) -> list[dict[str, Any]]:
+    """冷启动无实盘提案：允许 5/5 历史/压力月归因；实盘就绪且有提案：至少 3/5 响应实盘。"""
     has_live_docs = bool(live_meta["反思"] or live_meta["提案"])
-    live_theme = (
-        "响应近期实盘反思/提案"
-        if has_live_docs
-        else "响应实盘空样本：保本金、降换手、收紧风控（记分卡交易日=0）"
-    )
-
     cands: list[dict[str, Any]] = []
 
     def pack(name: str, src: str, g: GenomeParams, diff: str, rationale: str) -> dict[str, Any]:
         g = g.clamp()
-        return {
-            "名称": name,
-            "来源": src,
-            "差异": diff,
-            "理由": rationale,
-            "参数": g,
-        }
+        return {"名称": name, "来源": src, "差异": diff, "理由": rationale, "参数": g}
 
-    # 实盘向 1：收紧止损
+    if pure_history and not has_live_docs:
+        # 5/5：历史窗 + 压力月抽象归因（禁止点名）
+        g1 = deepcopy(base)
+        g1.chaos_pos = (0.00, 0.30)
+        g1.cash_lo = 0.12
+        cands.append(
+            pack(
+                "C1_压力月_混沌更快降仓",
+                "压力月",
+                g1,
+                "G1.混沌期总仓上限 0.50→0.30；现金下限 0.05→0.12",
+                "压力月抽象归因：回撤期降仓过慢，抬现金下限",
+            )
+        )
+
+        g2 = deepcopy(base)
+        g2.stop_from_peak = 0.15
+        g2.warn_from_peak = 0.10
+        cands.append(
+            pack(
+                "C2_压力月_收紧止损",
+                "压力月",
+                g2,
+                "G4.自高点强制止损 0.20→0.15；预警 0.15→0.10",
+                "压力月抽象归因：回撤失控时风控触发偏晚",
+            )
+        )
+
+        g3 = deepcopy(base)
+        g3.outflow_days = 2
+        g3.max_sells_day = 1
+        g3.chaos_low_activity = True
+        cands.append(
+            pack(
+                "C3_压力月_降频与更快流出",
+                "压力月",
+                g3,
+                "G5.主题流出退出天数 3→2；G10.无独立动机单日最多清/减 2→1",
+                "压力月抽象归因：混沌期交易过频，流出确认后离场偏慢",
+            )
+        )
+
+        g4 = deepcopy(base)
+        g4.open_step = 0.06
+        g4.catalyst_hits = 3
+        cands.append(
+            pack(
+                "C4_历史_小步与更高催化门槛",
+                "历史",
+                g4,
+                "G2.新开底仓 0.08→0.06；G9.催化最少命中数 2→3",
+                "历史窗归因：试错仓偏大、多笔同步门槛偏低",
+            )
+        )
+
+        g5 = deepcopy(base)
+        g5.range_pos = (0.50, 0.65)
+        g5.defense_hi = 0.30
+        cands.append(
+            pack(
+                "C5_历史_震荡降仓抬防御",
+                "历史",
+                g5,
+                "G1.震荡轮动总仓 0.60–0.75→0.50–0.65；防御上限 0.25→0.30",
+                "历史窗归因：震荡段总仓偏高，防御角色预算不足",
+            )
+        )
+        assert all(c["来源"] in ("历史", "压力月") for c in cands)
+        return cands
+
+    # 实盘就绪或已有实盘文档：至少 3/5 响应实盘
+    live_theme = "响应近期实盘反思/提案" if has_live_docs else "响应实盘路径保本金主题"
     g1 = deepcopy(base)
     g1.stop_from_peak = 0.16
     g1.warn_from_peak = 0.12
-    cands.append(
-        pack(
-            "C1_实盘_收紧止损",
-            "实盘",
-            g1,
-            "G4.自高点强制止损 0.20→0.16；预警 0.15→0.12",
-            live_theme + "；降低纸交易回撤暴露",
-        )
-    )
+    cands.append(pack("C1_实盘_收紧止损", "实盘", g1, "G4.自高点强制止损 0.20→0.16；预警 0.15→0.12", live_theme + "；降低回撤暴露"))
 
-    # 实盘向 2：混沌更低仓
     g2 = deepcopy(base)
     g2.chaos_pos = (0.00, 0.35)
     g2.cash_lo = 0.10
-    cands.append(
-        pack(
-            "C2_实盘_混沌降仓",
-            "实盘",
-            g2,
-            "G1.混沌期总仓上限 0.50→0.35；现金下限 0.05→0.10",
-            live_theme + "；不确定则更大现金",
-        )
-    )
+    cands.append(pack("C2_实盘_混沌降仓", "实盘", g2, "G1.混沌期总仓上限 0.50→0.35；现金下限 0.05→0.10", live_theme + "；不确定则更大现金"))
 
-    # 实盘向 3：降低开仓步长
     g3 = deepcopy(base)
     g3.open_step = 0.06
     g3.outflow_days = 2
-    cands.append(
-        pack(
-            "C3_实盘_小步与更快流出反应",
-            "实盘",
-            g3,
-            "G2.新开底仓 0.08→0.06；G5.主题流出退出天数 3→2",
-            live_theme + "；试错更小、流出反应更快",
-        )
-    )
+    cands.append(pack("C3_实盘_小步与更快流出反应", "实盘", g3, "G2.新开底仓 0.08→0.06；G5.主题流出退出天数 3→2", live_theme + "；试错更小、流出更快"))
 
-    # 历史向 1：趋势仓略抬（对照）
     g4 = deepcopy(base)
     g4.trend_pos = (0.85, 0.95)
-    g4.offense_hi = 0.75
-    # offense_hi will clamp with hard top via backtest 0.20 single sleeve — keep budget
-    g4.offense_hi = 0.70
-    cands.append(
-        pack(
-            "C4_历史_趋势抬仓",
-            "历史",
-            g4,
-            "G1.趋势上行总仓下限 0.80→0.85",
-            "历史窗归因对照：趋势段参与度略升（不超过 2/5 配额）",
-        )
-    )
+    cands.append(pack("C4_历史_趋势抬仓", "历史", g4, "G1.趋势上行总仓下限 0.80→0.85", "历史窗归因对照：趋势段参与度略升"))
 
-    # 历史向 2：略放宽止损对照
     g5 = deepcopy(base)
     g5.stop_from_peak = 0.22
     g5.warn_from_peak = 0.16
-    cands.append(
-        pack(
-            "C5_历史_止损略宽",
-            "历史",
-            g5,
-            "G4.自高点强制止损 0.20→0.22；预警 0.15→0.16",
-            "历史窗归因对照：降低过早止损（对照用，冲突时偏信实盘）",
-        )
-    )
+    cands.append(pack("C5_历史_止损略宽", "历史", g5, "G4.自高点强制止损 0.20→0.22；预警 0.15→0.16", "历史窗归因对照：降低过早止损"))
 
     assert sum(1 for c in cands if c["来源"] == "实盘") >= 3
     assert sum(1 for c in cands if c["来源"] == "历史") <= 2
@@ -635,7 +756,6 @@ def mutate_candidates(base: GenomeParams, live_meta: dict[str, list[str]]) -> li
 
 
 def genome_md_from_params(g: GenomeParams, parent: str, generation: int, note: str) -> str:
-    # 仅在晋级时调用；本轮因实盘不足预期不晋级
     return f"""---
 name: strategy-genome
 version: {g.version}
@@ -760,16 +880,25 @@ description: 可进化战术基因。禁止个股名与细分行业/概念名。
 
 ## G12. 评分权重提示（只读）
 
-- 实盘权重：0.70
+- 实盘权重：0.70（仅实盘交易日 ≥ 20 时启用）
 - 历史权重：0.30
-- 最少实盘交易日：20
+- 最少实盘交易日：20（未达标 → 纯历史晋级，不阻塞）
+- 压力月必评：2026-04、2026-07（单独出收益/回撤）
+- 本文件不得改写上述权重与压力月列表。
 
 ## G13. 版本记录
 
 | 版本 | 代数 | 变更 |
 |------|------|------|
 | {g.version} | {generation} | {note} |
+| {parent} | — | 父版本 |
 """
+
+
+def fmt_pct(x: float | None) -> str:
+    if x is None:
+        return "—"
+    return f"{x:.4f}"
 
 
 def main() -> None:
@@ -778,23 +907,29 @@ def main() -> None:
     win = init_or_load_window(panel)
     scorecard = json.loads(SCORECARD_PATH.read_text(encoding="utf-8"))
     live_days = int(scorecard.get("交易日数") or 0)
+    min_live = int(win.get("最少实盘交易日") or 20)
     win["现任实盘交易日数"] = live_days
+
+    pure_history = live_days < min_live
+    mode = "纯历史" if pure_history else "实盘加权"
+    win["晋级模式"] = mode
 
     check = checker()
     live_meta = latest_live_files()
-    base = parse_v0_genome()
-    base.version = win.get("现任基因版本") or "v0"
+    base = parse_genome()
+    base.version = win.get("现任基因版本") or base.version or "v0"
 
     last = panel.index.max().date()
     closed_end = last_closed_month_end(last)
     win["数据最早日"] = str(panel.index.min().date())
     win["数据最末日"] = str(last)
     win["已封闭月终点"] = str(closed_end)
+    win["压力月"] = ["2026-04", "2026-07"]
+    win["压力月默认最大回撤上限"] = STRESS_DD_CAP
 
     b0, b1 = win["盲测段起"], win["盲测段止"]
     e0, e1 = win["进化段起"], win["进化段止"]
 
-    # 历史窗已尽且尚无新封闭月：仍消化实盘并复评候选，但不伪称完成新的右移
     awaiting_month = win.get("状态") == "历史窗已尽_待新月封闭"
     can_extend = False
     if awaiting_month and win.get("进化段起"):
@@ -806,47 +941,60 @@ def main() -> None:
             win["状态"] = "突变中"
             win["备注"] = "新封闭月就绪，恢复滚动前进。"
 
-    # 现任基线
     base_hist = backtest(panel, base, b0, b1)
-    live_s, live_note = live_score(scorecard)
-    base_composite = W_LIVE * live_s + W_HIST * base_hist["年化"]
+    base_stress = eval_stress_months(panel, base)
+    live_s, live_note, live_ready = live_score(scorecard, min_live)
+    if pure_history:
+        base_composite = float(base_hist["年化"])
+    else:
+        assert live_s is not None
+        base_composite = W_LIVE * live_s + W_HIST * base_hist["年化"]
+
     paper_mdd = scorecard.get("最大回撤")
     if paper_mdd is None:
         paper_mdd = 0.0
 
-    cands = mutate_candidates(base, live_meta)
+    cands = mutate_candidates(base, live_meta, pure_history=pure_history)
     rows = []
     best = None
-    promote_blocked = live_days < int(win.get("最少实盘交易日") or 20)
 
     for c in cands:
-        # 差异合法性：拒绝点名
         if any(re.search(p, c["差异"] + c["理由"]) for p in FORBIDDEN_NAME_PATTERNS):
-            rows.append({**c, "拒收": True, "原因": "差异含违禁点名"})
+            rows.append({**{k: v for k, v in c.items() if k != "参数"}, "拒收": True, "原因": "差异含违禁点名"})
             continue
         hist = backtest(panel, c["参数"], b0, b1)
-        comp = W_LIVE * live_s + W_HIST * hist["年化"]
-        dd_hist_ok = hist["最大回撤"] <= base_hist["最大回撤"] * (1 + EPS_DD) + 1e-12
-        # 纸交易回撤：候选尚无独立纸交易账户，沿用现任纸交易回撤门槛（空样本时视为通过占位，但仍不得晋级）
-        if live_days == 0:
+        stress = eval_stress_months(panel, c["参数"])
+        s_ok, s_note = stress_gate_ok(stress, base_stress, float(win.get("压力月默认最大回撤上限") or STRESS_DD_CAP))
+
+        if pure_history:
+            comp = float(hist["年化"])
             dd_live_ok = True
         else:
-            # 无候选独立纸交易回撤时，要求不劣于现任记分卡回撤门（保守：沿用现任）
-            dd_live_ok = paper_mdd <= float(scorecard.get("最大回撤") or 0) * (1 + EPS_DD) + 1e-12
+            assert live_s is not None
+            comp = W_LIVE * live_s + W_HIST * hist["年化"]
+            if live_days == 0:
+                dd_live_ok = True
+            else:
+                dd_live_ok = float(paper_mdd) <= float(scorecard.get("最大回撤") or 0) * (1 + EPS_DD) + 1e-12
 
-        pass_gate = dd_hist_ok and dd_live_ok and (comp > base_composite) and (not promote_blocked)
+        dd_hist_ok = hist["最大回撤"] <= base_hist["最大回撤"] * (1 + EPS_DD) + 1e-12
+        pass_gate = bool(dd_hist_ok and dd_live_ok and s_ok and (comp > base_composite + 1e-12))
+
         rec = {
             "名称": c["名称"],
             "来源": c["来源"],
             "差异": c["差异"],
             "理由": c["理由"],
-            "实盘分": live_s,
+            "实盘分": live_s if live_ready else "未就绪",
             "历史分": hist["年化"],
             "综合分": comp,
             "历史最大回撤": hist["最大回撤"],
             "历史总收益": hist["总收益"],
             "回撤门槛_历史通过": dd_hist_ok,
             "回撤门槛_纸交易通过": dd_live_ok,
+            "压力月门槛通过": s_ok,
+            "压力月注": s_note,
+            "压力月": stress,
             "可晋级": pass_gate,
             "拒收": False,
         }
@@ -856,33 +1004,30 @@ def main() -> None:
 
     decision = "保持现任"
     new_version = base.version
-    if best and not promote_blocked:
+    if best:
         decision = f"晋级:{best['名称']}"
-        # 版本号 +1
         m = re.search(r"v(\d+)", base.version)
-        new_version = f"v{int(m.group(1))+1}" if m else "v1"
+        gen_n = int(m.group(1)) + 1 if m else 1
+        new_version = f"v{gen_n}"
         best["参数"].version = new_version
         GENOME_PATH.write_text(
             genome_md_from_params(
                 best["参数"],
                 parent=base.version,
-                generation=int(m.group(1)) + 1 if m else 1,
+                generation=gen_n,
                 note=best["差异"],
             ),
             encoding="utf-8",
         )
         win["现任基因版本"] = new_version
     else:
-        if promote_blocked:
-            decision = "保持现任（实盘交易日<20，禁止晋级）"
-        elif not any(r.get("可晋级") for r in rows if not r.get("拒收")):
-            decision = "保持现任（无候选过线）"
+        if not any(r.get("可晋级") for r in rows if not r.get("拒收")):
+            decision = "保持现任（无候选过历史分/回撤/压力月门槛）"
 
     if awaiting_month and not can_extend:
-        # 历史暂时跑完：消化实盘反思/提案并准备候选，等待新月封闭后再延伸
         win["状态"] = "历史窗已尽_待新月封闭"
         win["备注"] = (
-            "历史窗暂尽；本轮已消化实盘反思/提案并复评 5 候选。"
+            f"晋级模式={mode}；历史窗暂尽；本轮已复评 5 候选并输出压力月分项。"
             f"已封闭月终点={closed_end}；待新月份封闭后右移。"
         )
         if not live_meta["反思"] and not live_meta["提案"]:
@@ -890,19 +1035,20 @@ def main() -> None:
         else:
             decision = decision + "；历史窗已尽，已消化新实盘文件，等待新月封闭"
     else:
-        # 决策后右移
         win["状态"] = "右移中"
         win = shift_window(win, panel)
 
     win["最近决策"] = decision
     win["最近一代时间"] = utc_now()
     win["现任实盘交易日数"] = live_days
+    win["晋级模式"] = mode
     win["更新时间"] = utc_now()
     WINDOW_PATH.write_text(json.dumps(win, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     gen_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     log = {
         "代数时间": gen_id,
+        "晋级模式": mode,
         "窗口": {
             "进化段": f"{e0}~{e1}",
             "盲测段": f"{b0}~{b1}",
@@ -919,26 +1065,27 @@ def main() -> None:
         "现任": {
             "版本": base.version,
             "实盘交易日": live_days,
-            "实盘分": live_s,
+            "实盘分": live_s if live_ready else "未就绪",
             "实盘注": live_note,
             "历史分": base_hist["年化"],
             "历史最大回撤": base_hist["最大回撤"],
             "历史总收益": base_hist["总收益"],
             "综合分": base_composite,
             "纸交易最大回撤": scorecard.get("最大回撤"),
+            "压力月": base_stress,
         },
-        "权重": {"实盘": W_LIVE, "历史": W_HIST},
+        "权重": {"实盘": W_LIVE if not pure_history else 0.0, "历史": W_HIST if not pure_history else 1.0},
         "候选": [{k: v for k, v in r.items() if k != "参数"} for r in rows],
         "决策": decision,
         "新版本": new_version,
         "回测代理说明": "历史分用角色代理指数面板（进攻/次线/防御/工具）按基因参数回放；规则层无个股点名。",
         "数据源": "akshare stock_zh_index_daily → evolution/data/*.csv",
     }
-    log_path = LOG / f"{gen_id}_gen.md"
-    # 中文 Markdown 日志
+
     lines = [
         f"# 进化日志 {gen_id}",
         "",
+        f"- 晋级模式：**{mode}**",
         f"- 决策：**{decision}**",
         f"- 现任版本：{base.version} → 记录版本：{new_version}",
         f"- 进化段：{e0} ~ {e1}",
@@ -946,52 +1093,98 @@ def main() -> None:
         f"- 右移后状态：{win.get('状态')}",
         f"- 检查器：{'通过' if check['通过'] else '失败'} {check['问题']}",
         f"- 实盘文件：反思={live_meta['反思'] or '无'}；提案={live_meta['提案'] or '无'}",
-        f"- 实盘分={live_s:.4f}（{live_note}）；现任历史分={base_hist['年化']:.4f}；现任综合分={base_composite:.4f}",
+        f"- 实盘分={'未就绪' if not live_ready else f'{live_s:.4f}'}（{live_note}）",
+        f"- 现任历史分={base_hist['年化']:.4f}；现任综合分={base_composite:.4f}",
         f"- 现任历史最大回撤={base_hist['最大回撤']:.4f}；纸交易最大回撤={scorecard.get('最大回撤')}",
+        "",
+        "## 压力月分项（现任）",
+        "",
+        "| 压力月 | 可得 | 扣成本收益 | 最大回撤 | 交易次数 | 风控触发 | 硬顶触发 | 交易日数 |",
+        "|---|---|---:|---:|---:|---:|---:|---:|",
+    ]
+    for label, _, _ in STRESS_MONTHS:
+        s = base_stress[label]
+        lines.append(
+            f"| {label} | {'是' if s['可得'] else '否'} | {fmt_pct(s['扣成本收益'])} | {fmt_pct(s['最大回撤'])} | "
+            f"{s['交易次数'] if s['交易次数'] is not None else '—'} | "
+            f"{s['风控触发次数'] if s['风控触发次数'] is not None else '—'} | "
+            f"{s['硬顶触发次数'] if s['硬顶触发次数'] is not None else '—'} | {s['交易日数']} |"
+        )
+
+    lines += [
         "",
         "## 候选",
         "",
-        "| 名称 | 来源 | 实盘分 | 历史分 | 综合分 | 历史回撤 | 门槛 | 可晋级 | 差异 |",
-        "|---|---|---:|---:|---:|---:|---|---|---|",
+        "| 名称 | 来源 | 实盘分 | 历史分 | 综合分 | 历史回撤 | 历史门槛 | 压力月门槛 | 可晋级 | 差异 |",
+        "|---|---|---|---:|---:|---:|---|---|---|---|",
     ]
     for r in rows:
         if r.get("拒收"):
-            lines.append(f"| {r['名称']} | {r['来源']} | - | - | - | - | 拒收 | 否 | {r.get('原因')} |")
+            lines.append(f"| {r['名称']} | {r['来源']} | - | - | - | - | 拒收 | - | 否 | {r.get('原因')} |")
             continue
-        gate = f"H{'Y' if r['回撤门槛_历史通过'] else 'N'}/L{'Y' if r['回撤门槛_纸交易通过'] else 'N'}"
+        live_cell = r["实盘分"] if isinstance(r["实盘分"], str) else f"{r['实盘分']:.4f}"
         lines.append(
-            f"| {r['名称']} | {r['来源']} | {r['实盘分']:.4f} | {r['历史分']:.4f} | {r['综合分']:.4f} | "
-            f"{r['历史最大回撤']:.4f} | {gate} | {'是' if r['可晋级'] else '否'} | {r['差异']} |"
+            f"| {r['名称']} | {r['来源']} | {live_cell} | {r['历史分']:.4f} | {r['综合分']:.4f} | "
+            f"{r['历史最大回撤']:.4f} | {'Y' if r['回撤门槛_历史通过'] else 'N'} | "
+            f"{'Y' if r['压力月门槛通过'] else 'N'} | {'是' if r['可晋级'] else '否'} | {r['差异']} |"
         )
+
+    lines += ["", "## 压力月分项（各候选）", ""]
+    for r in rows:
+        if r.get("拒收"):
+            continue
+        lines += [
+            f"### {r['名称']}（来源={r['来源']}）",
+            "",
+            "| 压力月 | 扣成本收益 | 最大回撤 | 交易次数 | 风控触发 | 硬顶触发 |",
+            "|---|---:|---:|---:|---:|---:|",
+        ]
+        for label, _, _ in STRESS_MONTHS:
+            s = r["压力月"][label]
+            lines.append(
+                f"| {label} | {fmt_pct(s['扣成本收益'])} | {fmt_pct(s['最大回撤'])} | "
+                f"{s['交易次数'] if s['交易次数'] is not None else '—'} | "
+                f"{s['风控触发次数'] if s['风控触发次数'] is not None else '—'} | "
+                f"{s['硬顶触发次数'] if s['硬顶触发次数'] is not None else '—'} |"
+            )
+        lines += ["", f"- 压力月门槛：{r['压力月注']}", ""]
+
     lines += [
-        "",
         "## 说明",
         "",
-        "- 综合分 = 0.70×实盘分 + 0.30×历史分。",
-        "- 双轨回撤 ε=0.10；实盘交易日<20 不得晋级。",
+        f"- 本轮晋级模式：{mode}。" + ("综合分=历史分；不因实盘未就绪阻塞晋级。" if pure_history else "综合分=0.70×实盘分+0.30×历史分。"),
+        "- 历史回撤 ε=0.10；压力月门槛：候选各月最大回撤≤现任同月×1.10（现任无样本则≤25%）。",
         "- 历史回放：每窗现金 100 万；信号 T→T+1 开盘；佣金双边万三、卖出印花税千一、滑点 0.1%。",
-        "- 纸交易账户未重启。",
+        "- 纸交易账户未现金重启。",
+        "- 规则层无个股/细分点名；压力月归因仅抽象形态。",
         "",
         "```json",
         json.dumps(log, ensure_ascii=False, indent=2),
         "```",
         "",
     ]
+    log_path = LOG / f"{gen_id}_gen.md"
     log_path.write_text("\n".join(lines), encoding="utf-8")
     (LOG / f"{gen_id}_gen.json").write_text(json.dumps(log, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     summary = {
+        "晋级模式": mode,
         "决策": decision,
         "窗口盲测": f"{b0}~{b1}",
         "右移后状态": win.get("状态"),
+        "现任综合分": base_composite,
+        "现任历史分": base_hist["年化"],
+        "实盘分": "未就绪" if not live_ready else live_s,
         "日志": str(log_path.relative_to(ROOT)),
         "检查器通过": check["通过"],
+        "新版本": new_version,
         "候选摘要": [
             {
                 "名称": r["名称"],
                 "来源": r["来源"],
                 "综合分": r.get("综合分"),
                 "历史分": r.get("历史分"),
+                "压力月门槛": r.get("压力月门槛通过"),
                 "可晋级": r.get("可晋级"),
             }
             for r in rows
