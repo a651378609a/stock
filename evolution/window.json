@@ -1,0 +1,1 @@
+{"evolve_start":null,"evolve_end":null,"blind_start":null,"blind_end":null,"incumbent_genome_version":"v0","live_trading_days_on_incumbent":0,"status":"mutating","w_live":0.70,"w_hist":0.30,"min_live_trading_days":20,"notes":"Initialize on first evolution run using earliest available A-share history. Prefer live reflections over hist."}
