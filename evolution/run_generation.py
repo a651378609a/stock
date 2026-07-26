@@ -115,7 +115,7 @@ def load_panel() -> pd.DataFrame:
         frames.append(df.set_index("date")[[c for c in df.columns if c.startswith(role)]])
     panel = pd.concat(frames, axis=1, join="inner").sort_index()
     # 仅用已收盘完整日；开放中的今日不进入盲测
-    today = date(2026, 7, 26)
+    today = datetime.now(timezone.utc).date()
     panel = panel[panel.index.date < today]
     return panel
 
@@ -785,8 +785,26 @@ def main() -> None:
     base = parse_v0_genome()
     base.version = win.get("现任基因版本") or "v0"
 
+    last = panel.index.max().date()
+    closed_end = last_closed_month_end(last)
+    win["数据最早日"] = str(panel.index.min().date())
+    win["数据最末日"] = str(last)
+    win["已封闭月终点"] = str(closed_end)
+
     b0, b1 = win["盲测段起"], win["盲测段止"]
     e0, e1 = win["进化段起"], win["进化段止"]
+
+    # 历史窗已尽且尚无新封闭月：仍消化实盘并复评候选，但不伪称完成新的右移
+    awaiting_month = win.get("状态") == "历史窗已尽_待新月封闭"
+    can_extend = False
+    if awaiting_month and win.get("进化段起"):
+        e0_try = shift_evol_start(date.fromisoformat(win["进化段起"]), 6)
+        _, _, nb0_try, nb1_try = window_from_evol_start(e0_try)
+        can_extend = nb1_try <= closed_end and len(panel.loc[str(nb0_try) : str(nb1_try)]) >= 20
+        if can_extend:
+            awaiting_month = False
+            win["状态"] = "突变中"
+            win["备注"] = "新封闭月就绪，恢复滚动前进。"
 
     # 现任基线
     base_hist = backtest(panel, base, b0, b1)
@@ -809,7 +827,6 @@ def main() -> None:
         hist = backtest(panel, c["参数"], b0, b1)
         comp = W_LIVE * live_s + W_HIST * hist["年化"]
         dd_hist_ok = hist["最大回撤"] <= base_hist["最大回撤"] * (1 + EPS_DD) + 1e-12
-        dd_live_ok = True if live_days == 0 else (paper_mdd <= (paper_mdd * (1 + EPS_DD) + 1e-12))
         # 纸交易回撤：候选尚无独立纸交易账户，沿用现任纸交易回撤门槛（空样本时视为通过占位，但仍不得晋级）
         if live_days == 0:
             dd_live_ok = True
@@ -861,12 +878,26 @@ def main() -> None:
         elif not any(r.get("可晋级") for r in rows if not r.get("拒收")):
             decision = "保持现任（无候选过线）"
 
-    # 决策后右移
-    win["状态"] = "右移中"
-    win = shift_window(win, panel)
+    if awaiting_month and not can_extend:
+        # 历史暂时跑完：消化实盘反思/提案并准备候选，等待新月封闭后再延伸
+        win["状态"] = "历史窗已尽_待新月封闭"
+        win["备注"] = (
+            "历史窗暂尽；本轮已消化实盘反思/提案并复评 5 候选。"
+            f"已封闭月终点={closed_end}；待新月份封闭后右移。"
+        )
+        if not live_meta["反思"] and not live_meta["提案"]:
+            decision = decision + "；历史窗已尽且无新实盘文件，等待新月封闭"
+        else:
+            decision = decision + "；历史窗已尽，已消化新实盘文件，等待新月封闭"
+    else:
+        # 决策后右移
+        win["状态"] = "右移中"
+        win = shift_window(win, panel)
+
     win["最近决策"] = decision
     win["最近一代时间"] = utc_now()
     win["现任实盘交易日数"] = live_days
+    win["更新时间"] = utc_now()
     WINDOW_PATH.write_text(json.dumps(win, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     gen_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
