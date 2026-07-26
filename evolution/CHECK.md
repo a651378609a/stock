@@ -8,7 +8,8 @@
 
 - 当存在 `evolution/live_proposals/PENDING` 时运行（Automation 可每小时错峰扫描）。  
 - 读取：`PENDING` 指向的 `gen_NNNN.md` + `gen_NNNN.diff`、当前正式 `skill.md`、本协议、`EVOLVE.md`（只读）。  
-- 行情：stock-sdk MCP；点位时间规则同交易 skill。
+- 行情：尝试 Automations 可用的行情 MCP（`stock-sdk` / `stock-sdk-mcp` / `china-a-stock-mcp` / `mcp-eastmoney` 等）；点位时间规则同交易 skill。  
+- 若 **全部不可用**：P1/P2 无法定量 → 失败类型 `DATA_UNAVAILABLE`，**不合并**（不得因 Evolve 已标 `未回测` 而放行）。
 
 ## 2. 验收优先级
 
@@ -19,13 +20,18 @@
 - 是否引入消息面  
 - diff 是否可干净应用于当前 `skill.md`  
 - 抽查：合并后规则是否仍要求 end_date≤T、T+1 成交、无未来函数  
+- 若灯号为 `未回测`：确认提案未伪造 2023–2025 收益/回撤数字  
 
 任一失败 → **不合并**，记失败。
 
-### P1 — 复核进化侧回撤声明
+### P1 — 独立复跑 2023–2025（权威）
 
-- 可信度检查：提案声称的 2023–2025 最大回撤灯号是否与其叙述一致；若 Check 有能力复跑 2023–2025，以复跑为准。  
-- 红灯级回撤 → 否决。
+Check **必须自己**对拟合并规则做 2023–2025 点位时间 walk-forward（不得采信 Evolve 自报数字）。
+
+- 提案灯号为 **`未回测`**：P1 **整段由 Check 首次计算**，按绿/黄/红裁定；红灯否决。  
+- 提案已报绿/黄：Check 复跑为准；若复跑与自报严重不符，以复跑为准并在报告注明。  
+- 灯号裁定与 Evolve 相同：≤20% 绿；20–25% 黄；>25% 红否决。  
+- 黄灯与绿灯在 P2 上门槛相同（YTD≥30%）。
 
 ### P2 — 2026 毕业考（进化不可见本段数字）
 
@@ -51,7 +57,7 @@
 
 - 规则在真实环境是否可执行（流动性、T+1、成本假设）  
 - 是否存在隐蔽穿越或过拟合 2023–2025 的迹象  
-- 失败时给出 **失败类型枚举**（供下轮进化，尽量少泄露可刷分细节）：如 `LOOKAHEAD` / `PARAM_ONLY` / `DRAWDOWN` / `YTD_BELOW_30` / `APRIL_FAIL` / `JULY_FAIL` / `DIFF_INVALID` / `UNIVERSE`
+- 失败时给出 **失败类型枚举**（供下轮进化，尽量少泄露可刷分细节）：如 `LOOKAHEAD` / `PARAM_ONLY` / `DRAWDOWN` / `YTD_BELOW_30` / `APRIL_FAIL` / `JULY_FAIL` / `DIFF_INVALID` / `UNIVERSE` / `DATA_UNAVAILABLE`
 
 ## 3. 合并规则
 
