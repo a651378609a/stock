@@ -1,0 +1,16 @@
+{
+  "round": 1,
+  "june": {
+    "return_pct": 19.73,
+    "pass": true
+  },
+  "july": {
+    "return_pct": -0.74,
+    "pass": false,
+    "note": "wait failure-confirm clear on 7/2 then defense; independent SDK settle"
+  },
+  "pass_nonneg": false,
+  "skill_gaps": [
+    "climax next-day reduce not strong enough"
+  ]
+}

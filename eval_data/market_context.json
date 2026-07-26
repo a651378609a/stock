@@ -1,0 +1,19 @@
+{
+  "training_window": "2026-01-01..2026-05-31",
+  "test_months": [
+    "2026-06",
+    "2026-07"
+  ],
+  "index_probe": {
+    "code": "sh000001",
+    "name": "上证指数",
+    "price": 3814.2,
+    "asof": "20260724"
+  },
+  "lessons": [
+    "high-beta climax then deep drawdown appears in training",
+    "low-vol defense relatively resilient in drawdown regimes",
+    "climax-zone next-day reduce prevents waiting for failure confirmation"
+  ],
+  "search_catalyst_sample": "A股 半导体 算力 2026年6月 — agent-search free_search_news (narrative only)"
+}

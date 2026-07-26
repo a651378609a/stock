@@ -1,0 +1,16 @@
+{
+  "round": 2,
+  "june": {
+    "return_pct": 19.73,
+    "pass": true
+  },
+  "july": {
+    "return_pct": 4.33,
+    "pass": true
+  },
+  "pass_nonneg": true,
+  "hygiene": "FAIL soft — need decision/execution timestamp split for conditional orders",
+  "skill_gaps": [
+    "backtest timestamp hygiene"
+  ]
+}
