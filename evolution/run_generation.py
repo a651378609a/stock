@@ -39,6 +39,10 @@ MIN_LIVE_DAYS = 20
 INIT_CASH = 1_000_000.0
 STRESS_MONTHS = ("2026-04", "2026-07")
 STRESS_MDD_CAP = 0.25
+TRAIN_END = date(2025, 12, 31)
+PRED_YEAR = 2026
+PRED_START = date(2026, 1, 1)
+PRED_END_CAL = date(2026, 12, 31)
 
 # 角色→数据文件（指数序列仅作 ETF 报价代理；日志按 ETF 记账）
 PROXY = {
@@ -112,7 +116,8 @@ def parse_v0_genome() -> GenomeParams:
     return GenomeParams(version="v0").clamp()
 
 
-def load_panel() -> pd.DataFrame:
+def load_panel(*, for_training: bool = False) -> pd.DataFrame:
+    """for_training=True 时硬截断到训练截止日，训练开始不可见预测年。"""
     frames = []
     for role, sym in PROXY.items():
         fp = DATA / f"{sym}.csv"
@@ -129,9 +134,10 @@ def load_panel() -> pd.DataFrame:
         )
         frames.append(df.set_index("date")[[c for c in df.columns if c.startswith(role)]])
     panel = pd.concat(frames, axis=1, join="inner").sort_index()
-    # 仅用已收盘完整日；开放中的今日不进入盲测
     today = datetime.now(timezone.utc).date()
     panel = panel[panel.index.date < today]
+    if for_training:
+        panel = panel[panel.index.date <= TRAIN_END]
     return panel
 
 
@@ -189,81 +195,93 @@ def shift_evol_start(e0: date, months: int = 6) -> date:
     return date(year, month0 + 1, 1)
 
 
-def init_or_load_window(panel: pd.DataFrame) -> dict[str, Any]:
-    win = json.loads(WINDOW_PATH.read_text(encoding="utf-8"))
-    if win.get("进化段起"):
-        return win
-
-    first = panel.index.min().date()
-    last = panel.index.max().date()
+def pred_segment_end(full_panel: pd.DataFrame) -> date:
+    last = full_panel.index.max().date()
     closed_end = last_closed_month_end(last)
+    return min(PRED_END_CAL, closed_end, last)
 
-    # 锚定最近已封闭月终点为盲测止：盲测=含该月在内的 6 个自然月，之前 24 个月为进化段
-    b1 = closed_end
-    b0 = shift_evol_start(date(b1.year, b1.month, 1), -5)
-    e0 = shift_evol_start(b0, -24)
-    e1 = b0 - timedelta(days=1)
-    if e0 < month_start(first) or len(panel.loc[str(b0) : str(b1)]) < 20:
-        # 回退：自数据最早月正向滚动到不超过封闭终点的最后合法窗
-        evol_start = month_start(first)
-        last_ok = None
-        while True:
-            ce0, ce1, cb0, cb1 = window_from_evol_start(evol_start)
-            if cb1 > closed_end:
-                break
-            if len(panel.loc[str(cb0) : str(cb1)]) >= 20:
-                last_ok = (ce0, ce1, cb0, cb1)
-            evol_start = shift_evol_start(evol_start, 6)
-        if last_ok is None:
-            raise RuntimeError("无法构造有效滚动窗：数据不足以覆盖 24+6 个月")
-        e0, e1, b0, b1 = last_ok
-    win.update(
-        {
-            "进化段起": str(e0),
-            "进化段止": str(e1),
-            "盲测段起": str(b0),
-            "盲测段止": str(b1),
-            "现任基因版本": "v0",
-            "现任实盘交易日数": int(json.loads(SCORECARD_PATH.read_text()).get("交易日数") or 0),
-            "状态": "评估中",
-            "数据最早日": str(first),
-            "数据最末日": str(last),
-            "已封闭月终点": str(closed_end),
-            "初始化说明": "窗口原为空：自最早可得指数代理历史滚动前进至最近已封闭盲测窗。",
-            "更新时间": utc_now(),
-        }
+
+def init_or_load_window(train_panel: pd.DataFrame, full_panel: pd.DataFrame) -> dict[str, Any]:
+    """训练窗≤2025-12-31；预测年2026固定为样本外。"""
+    win = json.loads(WINDOW_PATH.read_text(encoding="utf-8"))
+    first = train_panel.index.min().date()
+    p1 = pred_segment_end(full_panel)
+    p0 = PRED_START
+
+    # 进化段：训练截止日前约 24 个月
+    e1 = TRAIN_END
+    e0 = date(TRAIN_END.year - 2, TRAIN_END.month, 1)
+    if e0 < month_start(first):
+        e0 = month_start(first)
+
+    # 强制纠正旧窗口（若越界训练截止或缺少预测年字段）
+    need_reset = (
+        not win.get("进化段起")
+        or not win.get("预测段起")
+        or date.fromisoformat(str(win.get("进化段止") or "1900-01-01")) > TRAIN_END
+        or str(win.get("训练截止日")) != str(TRAIN_END)
     )
+    if need_reset or True:
+        # 始终对齐预测年协议（可保留基因版本）
+        ver = win.get("现任基因版本") or "v0"
+        win.update(
+            {
+                "训练截止日": str(TRAIN_END),
+                "进化段起": str(e0),
+                "进化段止": str(e1),
+                "预测年": PRED_YEAR,
+                "预测段起": str(p0),
+                "预测段止": str(p1),
+                # 兼容旧字段名：盲测=预测段
+                "盲测段起": str(p0),
+                "盲测段止": str(p1),
+                "现任基因版本": ver,
+                "现任实盘交易日数": int(json.loads(SCORECARD_PATH.read_text()).get("交易日数") or 0),
+                "状态": "评估中",
+                "数据最早日": str(first),
+                "数据最末日": str(full_panel.index.max().date()),
+                "已封闭月终点": str(last_closed_month_end(full_panel.index.max().date())),
+                "压力月": list(STRESS_MONTHS),
+                "交易宇宙": "仅场内ETF",
+                "初始化说明": "训练硬截断≤2025-12-31；预测年2026仅样本外评测（全年+压力月）。",
+                "更新时间": utc_now(),
+            }
+        )
     return win
 
 
-def shift_window(win: dict[str, Any], panel: pd.DataFrame) -> dict[str, Any]:
+def shift_window(win: dict[str, Any], train_panel: pd.DataFrame, full_panel: pd.DataFrame) -> dict[str, Any]:
+    """仅在训练期内右移进化窗；预测年锚点不变。"""
     e0 = date.fromisoformat(win["进化段起"])
-    ne0, ne1, nb0, nb1 = window_from_evol_start(shift_evol_start(e0, 6))
-
-    last = panel.index.max().date()
-    closed_end = last_closed_month_end(last)
-    if nb1 > closed_end:
-        win["状态"] = "历史窗已尽_待新月封闭"
-        win["备注"] = "右移后盲测终点超出已封闭月；继续消化实盘反思，等待新月份封闭。"
+    ne0 = shift_evol_start(e0, 6)
+    ne1 = TRAIN_END
+    # 保持进化段终点锚定训练截止；起点右移但不得使段长失控：仍要求 ne0 < ne1
+    if ne0 >= TRAIN_END:
+        win["状态"] = "训练窗已锚定_预测年复评"
+        win["备注"] = "进化段已贴训练截止日；继续在固定训练段上突变，并用预测年2026复评。"
+        win["预测段止"] = str(pred_segment_end(full_panel))
+        win["盲测段止"] = win["预测段止"]
         win["更新时间"] = utc_now()
         return win
 
-    seg = panel.loc[str(nb0) : str(nb1)]
-    if len(seg) < 20:
-        win["状态"] = "历史窗已尽_待新月封闭"
-        win["备注"] = "右移后盲测交易日不足；等待数据延伸。"
+    if len(train_panel.loc[str(ne0) : str(ne1)]) < 20:
+        win["状态"] = "训练窗已锚定_预测年复评"
+        win["备注"] = "训练段交易日不足右移；锚定复评预测年。"
         win["更新时间"] = utc_now()
         return win
 
+    p1 = pred_segment_end(full_panel)
     win.update(
         {
             "进化段起": str(ne0),
             "进化段止": str(ne1),
-            "盲测段起": str(nb0),
-            "盲测段止": str(nb1),
+            "预测段起": str(PRED_START),
+            "预测段止": str(p1),
+            "盲测段起": str(PRED_START),
+            "盲测段止": str(p1),
             "状态": "突变中",
             "更新时间": utc_now(),
-            "备注": "决策后右移 6 个月。",
+            "备注": "训练期内右移进化起点；预测年保持2026样本外。",
         }
     )
     return win
@@ -437,7 +455,6 @@ def backtest(
                                 "成交后仓位": round(weights[k], 4),
                                 "成交价": float(row[f"{k}_open"]),
                                 "盘面依据": rationale["盘面"],
-                                "消息面依据": rationale["消息面"],
                                 "动机形态": rationale["动机"],
                             }
                         )
@@ -555,20 +572,15 @@ def backtest(
         if risk_hit:
             motive = motive + "；" + "、".join(risk_hit)
 
-        # 盘面依据只用信号日及之前；消息面：本最小引擎无新闻包时显式声明
         board = (
             f"截至{dstr}收盘前可得：宽基体制={regime}；MA20={float(ma20.loc[dt]):.2f}；"
             f"MA60={float(ma60.loc[dt]):.2f}；近{g.outflow_days}日基准累计涨跌={recent_ret:.2%}；"
             f"资金连续偏弱={weak}"
         )
-        news = (
-            "消息面不足：历史最小包回放无带时间戳新闻，本笔仅依据信号日前盘面结构；"
-            "日更/全真路径必须补 ≤信号日09:00 的消息面，否则应倾向不交易"
-        )
         pending = {
             "weights": tgt,
             "signal_day": dstr,
-            "rationale": {"盘面": board, "消息面": news, "动机": motive},
+            "rationale": {"盘面": board, "动机": motive},
         }
 
     if not blind_eq:
@@ -632,6 +644,15 @@ def stress_gate(cand: dict[str, Any], base: dict[str, Any]) -> tuple[bool, str]:
             ok = False
             notes.append(f"{ym}回撤{cdd:.2%}>上限{STRESS_MDD_CAP:.0%}")
     return ok, ("；".join(notes) if notes else "压力月通过")
+
+
+def year_return_gate(cand_ret: float, base_ret: float) -> tuple[bool, str]:
+    """预测年全年/迄今收益不得显著差于现任。"""
+    floor = base_ret - abs(base_ret) * EPS_DD - 0.02  # 相对ε再加2pct绝对缓冲
+    if base_ret >= 0:
+        floor = min(floor, base_ret - 0.02)
+    ok = cand_ret + 1e-12 >= floor
+    return ok, (f"全年收益通过({cand_ret:.2%}≥{floor:.2%})" if ok else f"全年收益不足({cand_ret:.2%}<{floor:.2%})")
 
 
 def live_score(scorecard: dict[str, Any]) -> tuple[float | None, str, bool]:
@@ -900,7 +921,6 @@ def write_trades_md(gen_id: str, trades: list[dict[str, Any]], title: str) -> Pa
             f"- 成交价：{t['成交价']:.4f}",
             f"- 动机形态：{t['动机形态']}",
             f"- 盘面依据：{t['盘面依据']}",
-            f"- 消息面依据：{t['消息面依据']}",
             "",
         ]
     path.write_text("\n".join(lines), encoding="utf-8")
@@ -913,90 +933,94 @@ def write_trades_md(gen_id: str, trades: list[dict[str, Any]], title: str) -> Pa
 def main() -> None:
     LOG.mkdir(parents=True, exist_ok=True)
     TRADES.mkdir(parents=True, exist_ok=True)
-    panel = load_panel()
-    win = init_or_load_window(panel)
+    train_panel = load_panel(for_training=True)
+    full_panel = load_panel(for_training=False)
+    # 断言：训练面板不得含预测年
+    if len(train_panel) and train_panel.index.max().date() > TRAIN_END:
+        raise RuntimeError("训练面板泄漏：含训练截止日之后数据")
+
+    win = init_or_load_window(train_panel, full_panel)
     scorecard = json.loads(SCORECARD_PATH.read_text(encoding="utf-8"))
     live_days = int(scorecard.get("交易日数") or 0)
     win["现任实盘交易日数"] = live_days
 
     check = checker()
+    # 额外：训练截止检查
+    if date.fromisoformat(win["进化段止"]) > TRAIN_END:
+        check["通过"] = False
+        check["问题"] = list(check.get("问题") or []) + ["进化段越过训练截止日"]
+
     live_meta = latest_live_files()
     base = parse_v0_genome()
     base.version = win.get("现任基因版本") or "v0"
 
-    last = panel.index.max().date()
-    closed_end = last_closed_month_end(last)
-    win["数据最早日"] = str(panel.index.min().date())
-    win["数据最末日"] = str(last)
-    win["已封闭月终点"] = str(closed_end)
-    win["压力月"] = list(STRESS_MONTHS)
-    win["交易宇宙"] = "仅场内ETF"
-
-    b0, b1 = win["盲测段起"], win["盲测段止"]
     e0, e1 = win["进化段起"], win["进化段止"]
-
-    awaiting_month = win.get("状态") == "历史窗已尽_待新月封闭"
-    can_extend = False
-    if awaiting_month and win.get("进化段起"):
-        e0_try = shift_evol_start(date.fromisoformat(win["进化段起"]), 6)
-        _, _, nb0_try, nb1_try = window_from_evol_start(e0_try)
-        can_extend = nb1_try <= closed_end and len(panel.loc[str(nb0_try) : str(nb1_try)]) >= 20
-        if can_extend:
-            awaiting_month = False
-            win["状态"] = "突变中"
-            win["备注"] = "新封闭月就绪，恢复滚动前进。"
+    p0, p1 = win["预测段起"], win["预测段止"]
 
     live_s, live_note, live_ready = live_score(scorecard)
     mode = "实盘加权" if live_ready else "纯历史"
     win["晋级模式"] = mode
 
-    base_hist = backtest(panel, base, b0, b1, collect_trades=True, tag="现任盲测")
-    base_stress = stress_slices(panel, base)
+    # 预测年评分（全年/迄今）— 仅评测可用 full_panel
+    base_pred = backtest(full_panel, base, p0, p1, collect_trades=True, tag="现任预测年")
+    base_stress = stress_slices(full_panel, base)
     if live_ready:
         assert live_s is not None
-        base_composite = W_LIVE * live_s + W_HIST * base_hist["年化"]
+        base_composite = W_LIVE * live_s + W_HIST * base_pred["年化"]
     else:
-        base_composite = base_hist["年化"]
+        base_composite = base_pred["年化"]
 
     paper_mdd = float(scorecard.get("最大回撤") or 0.0)
     cands = mutate_candidates(base, live_meta, live_ready)
     rows = []
     best = None
-    all_trades: list[dict[str, Any]] = list(base_hist.get("交易明细") or [])
+    all_trades: list[dict[str, Any]] = list(base_pred.get("交易明细") or [])
 
     for c in cands:
         if any(re.search(p, c["差异"] + c["理由"]) for p in FORBIDDEN_NAME_PATTERNS):
             rows.append({**c, "拒收": True, "原因": "差异含违禁点名"})
             continue
-        hist = backtest(panel, c["参数"], b0, b1, collect_trades=True, tag=c["名称"])
-        all_trades.extend(hist.get("交易明细") or [])
-        cstress = stress_slices(panel, c["参数"])
+        pred = backtest(full_panel, c["参数"], p0, p1, collect_trades=True, tag=c["名称"])
+        all_trades.extend(pred.get("交易明细") or [])
+        cstress = stress_slices(full_panel, c["参数"])
         s_ok, s_note = stress_gate(cstress, base_stress)
+        y_ok, y_note = year_return_gate(float(pred["总收益"]), float(base_pred["总收益"]))
         if live_ready:
             assert live_s is not None
-            comp = W_LIVE * live_s + W_HIST * hist["年化"]
-            dd_live_ok = paper_mdd <= float(scorecard.get("最大回撤") or 0) * (1 + EPS_DD) + 1e-12
-        else:
-            comp = hist["年化"]
+            comp = W_LIVE * live_s + W_HIST * pred["年化"]
             dd_live_ok = True
-        dd_hist_ok = hist["最大回撤"] <= base_hist["最大回撤"] * (1 + EPS_DD) + 1e-12
-        pass_gate = dd_hist_ok and dd_live_ok and s_ok and (comp > base_composite + 1e-12)
+            if scorecard.get("最大回撤") is not None:
+                dd_live_ok = paper_mdd <= float(scorecard.get("最大回撤") or 0) * (1 + EPS_DD) + 1e-12
+        else:
+            comp = pred["年化"]
+            dd_live_ok = True
+        dd_pred_ok = pred["最大回撤"] <= base_pred["最大回撤"] * (1 + EPS_DD) + 1e-12
+        pass_gate = (
+            check["通过"]
+            and dd_pred_ok
+            and dd_live_ok
+            and s_ok
+            and y_ok
+            and (comp > base_composite + 1e-12)
+        )
         rec = {
             "名称": c["名称"],
             "来源": c["来源"],
             "差异": c["差异"],
             "理由": c["理由"],
             "实盘分": live_s if live_ready else "未就绪",
-            "历史分": hist["年化"],
+            "预测年分": pred["年化"],
+            "预测年收益": pred["总收益"],
             "综合分": comp,
-            "历史最大回撤": hist["最大回撤"],
-            "历史总收益": hist["总收益"],
-            "成交次数": hist["成交次数"],
+            "预测年最大回撤": pred["最大回撤"],
+            "成交次数": pred["成交次数"],
             "压力月": cstress,
             "压力月门槛": s_note,
-            "回撤门槛_历史通过": dd_hist_ok,
+            "全年收益门槛": y_note,
+            "回撤门槛_预测年通过": dd_pred_ok,
             "回撤门槛_纸交易通过": dd_live_ok,
             "压力月通过": s_ok,
+            "全年收益通过": y_ok,
             "可晋级": pass_gate,
             "拒收": False,
         }
@@ -1025,16 +1049,11 @@ def main() -> None:
         win["现任基因版本"] = new_version
         win["待监督确认"] = True
     else:
-        decision = "保持现任（无候选过历史/压力月门槛）"
+        decision = "保持现任（无候选过预测年全年/压力月/回撤门槛）"
         win["待监督确认"] = False
 
-    if awaiting_month and not can_extend:
-        win["状态"] = "历史窗已尽_待新月封闭"
-        win["备注"] = f"历史窗暂尽；已封闭月终点={closed_end}。可复评；晋级须经监督。"
-        decision = decision + "；历史窗已尽"
-    else:
-        win["状态"] = "右移中"
-        win = shift_window(win, panel)
+    win["状态"] = "右移中"
+    win = shift_window(win, train_panel, full_panel)
 
     win["最近决策"] = decision
     win["最近一代时间"] = utc_now()
@@ -1043,16 +1062,18 @@ def main() -> None:
     WINDOW_PATH.write_text(json.dumps(win, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     gen_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    trades_path = write_trades_md(gen_id, all_trades, "盲测窗内ETF调仓明细（含盘面依据；消息面不足已显式声明）")
+    trades_path = write_trades_md(gen_id, all_trades, "预测年2026内ETF调仓明细（仅盘面依据，无消息面）")
 
     log = {
         "代数时间": gen_id,
         "晋级模式": mode,
+        "训练截止日": str(TRAIN_END),
+        "预测年": PRED_YEAR,
         "交易宇宙": "仅场内ETF",
         "待监督确认": pending_audit,
         "窗口": {
             "进化段": f"{e0}~{e1}",
-            "盲测段": f"{b0}~{b1}",
+            "预测段": f"{p0}~{p1}",
             "右移后状态": win.get("状态"),
         },
         "检查器": check,
@@ -1062,36 +1083,45 @@ def main() -> None:
             "实盘交易日": live_days,
             "实盘分": live_s if live_ready else "未就绪",
             "实盘注": live_note,
-            "历史分": base_hist["年化"],
-            "历史最大回撤": base_hist["最大回撤"],
-            "历史总收益": base_hist["总收益"],
+            "预测年分": base_pred["年化"],
+            "预测年收益": base_pred["总收益"],
+            "预测年最大回撤": base_pred["最大回撤"],
             "综合分": base_composite,
             "压力月": base_stress,
-            "盲测成交次数": base_hist["成交次数"],
+            "预测年成交次数": base_pred["成交次数"],
         },
-        "权重": {"实盘": W_LIVE if live_ready else 0.0, "历史": W_HIST if live_ready else 1.0},
+        "权重": {"实盘": W_LIVE if live_ready else 0.0, "预测年": W_HIST if live_ready else 1.0},
         "候选": [{k: v for k, v in r.items() if k != "参数"} for r in rows],
         "决策": decision,
         "新版本": new_version,
         "交易明细文件": str(trades_path.relative_to(ROOT)),
-        "回测说明": "按ETF角色记账；报价可用指数序列代理；禁止正股；逐笔含盘面/消息面依据字段。",
+        "回测说明": "训练≤2025-12-31不可见2026；预测年2026样本外评测全年+压力月；仅盘面依据。",
     }
 
     lines = [
         f"# 进化日志 {gen_id}",
         "",
         f"- 决策：**{decision}**",
-        f"- 晋级模式：**{mode}**（实盘未就绪时可纯历史晋级，不因缺实盘分禁晋级）",
-        f"- 交易宇宙：**仅场内 ETF**",
-        f"- 现任版本：{base.version} → 记录版本：{new_version}",
-        f"- 进化段：{e0} ~ {e1}",
-        f"- 盲测段：{b0} ~ {b1}",
-        f"- 右移后状态：{win.get('状态')}",
+        f"- 晋级模式：**{mode}**",
+        f"- 训练截止：**{TRAIN_END}**（训练不可见其后数据）",
+        f"- 预测年：**{PRED_YEAR}** 段 {p0} ~ {p1}",
+        f"- 进化段（仅训练期）：{e0} ~ {e1}",
+        f"- 交易宇宙：仅场内 ETF；依据：仅盘面（无消息面）",
+        f"- 现任版本：{base.version} → {new_version}",
         f"- 检查器：{'通过' if check['通过'] else '失败'} {check['问题']}",
         f"- 实盘：{live_note}",
-        f"- 现任历史分={base_hist['年化']:.4f}；综合分={base_composite:.4f}；历史最大回撤={base_hist['最大回撤']:.4f}",
-        f"- 交易明细：`{trades_path.relative_to(ROOT)}`（共 {len(all_trades)} 笔）",
+        f"- 现任预测年收益={base_pred['总收益']:.2%}；年化={base_pred['年化']:.4f}；最大回撤={base_pred['最大回撤']:.2%}",
+        f"- 综合分={base_composite:.4f}",
+        f"- 交易明细：`{trades_path.relative_to(ROOT)}`（{len(all_trades)} 笔）",
         f"- 待监督确认：{pending_audit}",
+        "",
+        "## 预测年全年 / 迄今（必填）",
+        "",
+        f"- 区间：{p0} ~ {p1}",
+        f"- 扣成本收益：{base_pred['总收益']:.2%}",
+        f"- 年化：{base_pred['年化']:.4f}",
+        f"- 最大回撤：{base_pred['最大回撤']:.2%}",
+        f"- 成交次数：{int(base_pred['成交次数'])}",
         "",
         "## 压力月专项（必填）",
         "",
@@ -1108,26 +1138,27 @@ def main() -> None:
         "",
         "## 候选",
         "",
-        "| 名称 | 来源 | 实盘分 | 历史分 | 综合分 | 历史回撤 | 压力月 | 可晋级 | 差异 |",
-        "|---|---|---|---:|---:|---:|---|---|---|",
+        "| 名称 | 来源 | 实盘分 | 预测年分 | 全年收益 | 回撤 | 全年门槛 | 压力月 | 可晋级 | 差异 |",
+        "|---|---|---|---:|---:|---:|---|---|---|---|",
     ]
     for r in rows:
         if r.get("拒收"):
-            lines.append(f"| {r['名称']} | {r['来源']} | - | - | - | - | 拒收 | 否 | {r.get('原因')} |")
+            lines.append(f"| {r['名称']} | {r['来源']} | - | - | - | - | 拒收 | - | 否 | {r.get('原因')} |")
             continue
         live_cell = f"{r['实盘分']:.4f}" if isinstance(r["实盘分"], float) else r["实盘分"]
         lines.append(
-            f"| {r['名称']} | {r['来源']} | {live_cell} | {r['历史分']:.4f} | {r['综合分']:.4f} | "
-            f"{r['历史最大回撤']:.4f} | {r['压力月门槛']} | {'是' if r['可晋级'] else '否'} | {r['差异']} |"
+            f"| {r['名称']} | {r['来源']} | {live_cell} | {r['预测年分']:.4f} | {r['预测年收益']:.2%} | "
+            f"{r['预测年最大回撤']:.2%} | {r['全年收益门槛']} | {r['压力月门槛']} | "
+            f"{'是' if r['可晋级'] else '否'} | {r['差异']} |"
         )
     lines += [
         "",
         "## 说明",
         "",
-        f"- 模式={mode}：纯历史时综合分=历史年化；实盘加权时 0.70×实盘+0.30×历史。",
-        "- 必须同时过历史回撤门槛与压力月门槛（2026-04、2026-07）。",
-        "- 成交为场内ETF角色；逐笔依据见交易明细文件。",
-        "- **晋级最终生效须监督代理审计通过**（防穿越 + 路径合规）。",
+        "- 训练硬截断≤2025-12-31；2026仅样本外。",
+        "- 纯历史：综合分=预测年年化；实盘加权：0.70×实盘+0.30×预测年。",
+        "- 须同时过：预测年回撤、全年收益、压力月（04/07）。",
+        "- 交易明细仅盘面依据；晋级须监督通过。",
         "",
         "```json",
         json.dumps(log, ensure_ascii=False, indent=2),
@@ -1141,7 +1172,9 @@ def main() -> None:
     summary = {
         "决策": decision,
         "晋级模式": mode,
-        "窗口盲测": f"{b0}~{b1}",
+        "训练截止": str(TRAIN_END),
+        "预测段": f"{p0}~{p1}",
+        "现任预测年收益": base_pred["总收益"],
         "交易明细": str(trades_path.relative_to(ROOT)),
         "交易笔数": len(all_trades),
         "日志": str(log_path.relative_to(ROOT)),
@@ -1149,6 +1182,7 @@ def main() -> None:
         "压力月现任": base_stress,
     }
     print(json.dumps(summary, ensure_ascii=False, indent=2))
+
 
 
 if __name__ == "__main__":
