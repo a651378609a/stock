@@ -957,6 +957,7 @@ def main() -> None:
     cands = mutate_candidates(base, live_meta, pure_history=pure_history)
     rows = []
     best = None
+    checker_blocks = not check["通过"]
 
     for c in cands:
         if any(re.search(p, c["差异"] + c["理由"]) for p in FORBIDDEN_NAME_PATTERNS):
@@ -978,7 +979,13 @@ def main() -> None:
                 dd_live_ok = float(paper_mdd) <= float(scorecard.get("最大回撤") or 0) * (1 + EPS_DD) + 1e-12
 
         dd_hist_ok = hist["最大回撤"] <= base_hist["最大回撤"] * (1 + EPS_DD) + 1e-12
-        pass_gate = bool(dd_hist_ok and dd_live_ok and s_ok and (comp > base_composite + 1e-12))
+        pass_gate = bool(
+            (not checker_blocks)
+            and dd_hist_ok
+            and dd_live_ok
+            and s_ok
+            and (comp > base_composite + 1e-12)
+        )
 
         rec = {
             "名称": c["名称"],
@@ -1004,6 +1011,9 @@ def main() -> None:
 
     decision = "保持现任"
     new_version = base.version
+    if checker_blocks:
+        decision = f"保持现任（检查器未通过：{check['问题']}）"
+        best = None
     if best:
         decision = f"晋级:{best['名称']}"
         m = re.search(r"v(\d+)", base.version)
