@@ -1,1 +1,9 @@
-{"genome_version":"v0","trading_days":0,"net_cagr":null,"max_drawdown":null,"win_rate":null,"violations":0,"updated":null}
+{
+  "基因版本": "v0",
+  "交易日数": 0,
+  "扣成本年化": null,
+  "最大回撤": null,
+  "胜率": null,
+  "违规次数": 0,
+  "更新时间": null
+}

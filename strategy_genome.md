@@ -5,15 +5,15 @@ generation: 0
 description: 可进化战术基因。禁止个股名与细分行业/概念名。幅度与触发形态可被进化修改；不得突破 skill.md 硬顶与宪法。
 ---
 
-# Strategy Genome v0
+# 策略基因 v0
 
 > 进化代理只能改本文件。任何点名股票/细分行业/概念的条款视为非法，检查器拒收。
 
 ## G0. 元数据
 
-- `version`: v0
-- `parent`: null
-- `notes`: 从旧执行稿抽象蒸馏；已剥离品牌、个股与细分优先级。
+- 版本：v0
+- 父版本：无
+- 说明：从旧执行稿抽象蒸馏；已剥离品牌、个股与细分优先级。
 
 ## G1. 角色预算目标（在硬顶内）
 
@@ -28,12 +28,12 @@ description: 可进化战术基因。禁止个股名与细分行业/概念名。
 | 周期 | 0.00 | 0.30 | 与进攻波动互补 |
 | 工具（宽基/货币类 ETF） | 0.00 | 0.40 | 角色级，不点名代码 |
 
-**总仓目标 recs（软目标，受硬顶约束）**：
+**总仓软目标（受硬顶约束）**：
 
-- `trend_up_total`: 0.80–0.95  
-- `range_rotate_total`: 0.60–0.75  
-- `chaos_total`: 0.00–0.50  
-- `pre_event_risk_total`: 0.60–0.75  
+- 趋势上行总仓：0.80–0.95  
+- 震荡轮动总仓：0.60–0.75  
+- 混沌期总仓：0.00–0.50  
+- 事件前风险总仓：0.60–0.75  
 
 ## G2. 单笔步长
 
@@ -48,78 +48,78 @@ description: 可进化战术基因。禁止个股名与细分行业/概念名。
 
 ## G3. 单票软顶（硬顶仍为 20%）
 
-- `soft_cap_reduce_band`: 0.12–0.15（进入后优先把加仓层降回底仓带）  
-- `soft_cap_force_cut`: 0.15（主线未破也可连底仓下调）  
-- `base_band`: 0.08–0.09  
+- 减压带：0.12–0.15（进入后优先把加仓层降回底仓带）  
+- 强制下调线：0.15（主线未破也可连底仓下调）  
+- 底仓带：0.08–0.09  
 
 ## G4. 风控触发（抽象）
 
-- `hard_stop_from_peak`: 0.20（自持仓期高点回撤）  
-- `warn_from_peak`: 0.15  
-- `two_day_crash_stop`: 连续 2 日累计跌幅 > 0.20 → 强制退出优先  
-- `mid_term_add_only_if_drawdown_ge`: 0.10（中线角色；短线角色禁止亏损加仓）  
-- `never_average_down_weak`: true（弱势标的禁止补仓）  
-- `never_average_down_short_term_role`: true  
+- 自高点强制止损：0.20（自持仓期高点回撤）  
+- 自高点预警：0.15  
+- 两日暴跌止损：连续 2 日累计跌幅 > 0.20 → 强制退出优先  
+- 中线补仓需回撤达到：0.10（中线角色；短线角色禁止亏损加仓）  
+- 弱势禁止补仓：是  
+- 短线角色禁止补仓：是  
 
 ## G5. 资金连续性（主题级，非点名）
 
-- `theme_outflow_days_to_exit`: 3（连续净流出天数阈值，需同时偏弱于基准才清）  
-- `theme_dead_weeks_to_abandon`: 4（连续大流出周数 → 放弃该动态主题）  
-- `single_day_outflow_not_enough`: true  
+- 主题流出退出天数：3（连续净流出天数阈值，需同时偏弱于基准才清）  
+- 主题放弃周数：4（连续大流出周数 → 放弃该动态主题）  
+- 单日流出不足以为据：是  
 
 ## G6. 买入触发权重（形态开关）
 
-值为 `on|off` 或权重 0–1；进化可调，不可改写成点名清单。
+值为 开/关 或权重 0–1；进化可调，不可改写成点名清单。
 
-- `new_theme_base`: on  
-- `theme_diffusion_second_tier`: on  
-- `defense_for_vol_control`: on  
-- `catchup_relative_laggard`: on  
-- `rotate_higher_moat_same_theme`: on  
-- `rotate_earnings_verified_same_theme`: on  
-- `rotate_capacity_same_theme`: on  
-- `post_corp_action_capacity_entry`: on  
-- `dip_trial_on_divergence`: on  
-- `ma_pullback_add`: on  
-- `morning_weakness_entry`: on  
-- `chase_extended_breakout`: **off**（默认禁止追高）  
+- 新主题建底仓：开  
+- 主线扩散第二梯队：开  
+- 降波动开防御：开  
+- 相对滞后补涨：开  
+- 同主题换更高壁垒：开  
+- 同主题换业绩可验证：开  
+- 同主题换容量：开  
+- 公司行为后容量介入：开  
+- 分歧试错：开  
+- 均线回踩加仓：开  
+- 早盘弱势介入：开  
+- 追涨延伸突破：**关**（默认禁止追高）  
 
 ## G7. 卖出触发权重
 
-- `target_reached_scale_out`: on  
-- `catalyst_disappointment_cut`: on  
-- `overweight_band_reduce`: on  
-- `intraday_t_fail_remove_add_layer`: on  
-- `fundamental_miss_exit`: on  
-- `valuation_cap_exit`: on  
-- `theme_flow_exit`: on  
-- `weak_vs_theme_peers_exit`: on  
-- `risk_stop_exit`: on  
+- 目标到达分批减：开  
+- 催化失望减仓：开  
+- 超配减压带减仓：开  
+- 日内 T 失败去掉加仓层：开  
+- 基本面不及预期退出：开  
+- 估值压制退出：开  
+- 主题资金退出：开  
+- 弱于同主题退出：开  
+- 风控止损退出：开  
 
 ## G8. 时机偏好（抽象）
 
-- `prefer_enter_on_divergence_near_close`: true  
-- `prefer_add_on_morning_weakness`: true  
-- `no_chase_gap_up_extension`: true  
-- `reduce_on_bounce_not_on_cascade`: true  
-- `chaos_minimize_trades`: true  
-- `min_reward_risk_trial`: 3.0  
+- 偏好分歧尾盘试错：是  
+- 偏好早盘弱势加仓：是  
+- 禁止高开冲高追涨：是  
+- 反抽减而非下杀减：是  
+- 混沌期尽量少动：是  
+- 试错最低盈亏比：3.0  
 
 ## G9. 催化密度（多笔同步动作门槛）
 
-当下列条件在**盘前可见数据**中至少满足 `catalytic_min_hits` 条时，允许「先清背离角色 → 再开主线底仓」的多笔同步；否则默认少动。
+当下列条件在**盘前可见数据**中至少满足「催化最少命中数」条时，允许「先清背离角色 → 再开主线底仓」的多笔同步；否则默认少动。
 
-- `catalytic_min_hits`: 2  
-- `catalytic_signals`（抽象，运行时实例化）：  
+- 催化最少命中数：2  
+- 催化信号（抽象，运行时实例化）：  
   - 动态主线出现广度高潮（多标的大幅上涨/涨停潮类现象）  
   - 动态主线出现可验证超预期催化（业绩/订单/指引）  
   - 持仓中存在与当前主线背离的防御/弱仓需腾位  
 
 ## G10. 换手与交易频率软约束
 
-- `max_names_cut_per_day_without_distinct_motives`: 2  
-- `prefer_hold_when_thesis_intact`: true  
-- `intraday_t_enabled`: true  
+- 无独立动机时单日最多清/减只数：2  
+- 逻辑未坏优先持有：是  
+- 允许日内 T：是  
 
 ## G11. 进化约束（写给突变器）
 
@@ -134,19 +134,19 @@ description: 可进化战术基因。禁止个股名与细分行业/概念名。
 
 - 加入任何股票名、代码、细分行业、概念名  
 - 修改 `skill.md`  
-- 放宽评估成本/成交/ε/walk-forward 窗长 / `w_live`/`w_hist`  
+- 放宽评估成本/成交/ε/滚动前进窗长 / 实盘权重与历史权重  
 - 引用某盲测段「事后涨跌」作为改参理由  
-- 忽略 live 配额（每代至少 3/5 候选须响应 live）而纯历史刷分  
+- 忽略实盘配额（每代至少 3/5 候选须响应实盘）而纯历史刷分  
 
-## G12. 评分权重提示（只读，真源在 skill 壳）
+## G12. 评分权重提示（只读，真源在技能壳）
 
-- `w_live`: 0.70  
-- `w_hist`: 0.30  
-- `min_live_trading_days`: 20  
+- 实盘权重：0.70  
+- 历史权重：0.30  
+- 最少实盘交易日：20  
 - 日更反思权重大于历史回溯；本文件不得改写上述权重。  
 
 ## G13. 版本记录
 
-| version | generation | change |
-|---------|------------|--------|
-| v0 | 0 | 初始蒸馏；纳入 live 优先进化约束 |
+| 版本 | 代数 | 变更 |
+|------|------|------|
+| v0 | 0 | 初始蒸馏；纳入实盘优先进化约束；全文中文 |

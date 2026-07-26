@@ -1,1 +1,13 @@
-{"evolve_start":null,"evolve_end":null,"blind_start":null,"blind_end":null,"incumbent_genome_version":"v0","live_trading_days_on_incumbent":0,"status":"mutating","w_live":0.70,"w_hist":0.30,"min_live_trading_days":20,"notes":"Initialize on first evolution run using earliest available A-share history. Prefer live reflections over hist."}
+{
+  "进化段起": null,
+  "进化段止": null,
+  "盲测段起": null,
+  "盲测段止": null,
+  "现任基因版本": "v0",
+  "现任实盘交易日数": 0,
+  "状态": "突变中",
+  "权重_实盘": 0.7,
+  "权重_历史": 0.3,
+  "最少实盘交易日": 20,
+  "备注": "首次进化运行时，用最早可得 A 股历史初始化；实盘反思优先于历史回溯。"
+}
