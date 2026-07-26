@@ -1,0 +1,137 @@
+{
+  "settlement_source": "stock-sdk-mcp get_stock_fund_flow_history.close (get_history_kline currently fetch-failed)",
+  "search_tools": "agent-search-mcp free_search_news",
+  "buy_hold": {
+    "june_ret_pct": 15.18,
+    "july_ret_pct": -17.02,
+    "june_nav": 1151782.530280584,
+    "july_nav": 955744.6347198521
+  },
+  "R1_wait_failure_counterfactual": {
+    "june_ret_pct": 19.84,
+    "july_ret_pct": -0.68,
+    "june_nav": 1198409.486674257,
+    "july_nav": 1190304.3432987542
+  },
+  "final_R_climax_nextday": {
+    "label": "R2_climax_nextday",
+    "june_nav": 1198409.486674257,
+    "june_ret_pct": 19.84,
+    "july_nav": 1250766.395732251,
+    "july_ret_pct": 4.37,
+    "end_cash": 351830.1243110973,
+    "end_shares": {
+      "300308": 0.0,
+      "002463": 0.0,
+      "512480": 0.0,
+      "601288": 58153.73955555326,
+      "601318": 9471.165604982765
+    },
+    "trades": [
+      {
+        "date": "2026-06-02",
+        "action": "BUY",
+        "symbol": "512480",
+        "nav_pct": 0.1,
+        "decision_info_cutoff": "2026-06-01 15:00",
+        "execution_trigger_confirmed": "2026-06-02 conditional dip",
+        "skill": "§2.3",
+        "filled": 99610.78060484782,
+        "price": 1.04,
+        "nav_after": 996107.8060484781
+      },
+      {
+        "date": "2026-06-18",
+        "action": "SELL",
+        "symbol": "300308",
+        "nav_pct": 0.08,
+        "decision_info_cutoff": "2026-06-17 15:00",
+        "execution_trigger_confirmed": "2026-06-18 climax reduce",
+        "skill": "§2.8",
+        "filled": 89809.4918655415,
+        "price": 1367.88,
+        "nav_after": 1122618.6483192684
+      },
+      {
+        "date": "2026-06-25",
+        "action": "SELL",
+        "symbol": "002463",
+        "nav_pct": 0.05,
+        "decision_info_cutoff": "2026-06-24 15:00",
+        "execution_trigger_confirmed": "2026-06-25 climax continue",
+        "skill": "§2.8",
+        "filled": 58875.51642629565,
+        "price": 154.99,
+        "nav_after": 1177510.328525913
+      },
+      {
+        "date": "2026-06-25",
+        "action": "SELL",
+        "symbol": "512480",
+        "nav_pct": 0.05,
+        "decision_info_cutoff": "2026-06-24 15:00",
+        "execution_trigger_confirmed": "2026-06-25 climax continue",
+        "skill": "§2.8",
+        "filled": 58875.51642629565,
+        "price": 1.387,
+        "nav_after": 1177510.328525913
+      },
+      {
+        "date": "2026-07-01",
+        "action": "SELL",
+        "symbol": "300308",
+        "sell_all": true,
+        "decision_info_cutoff": "2026-06-30 15:00",
+        "execution_trigger_confirmed": "2026-07-01 next-day climax clear",
+        "skill": "§2.8",
+        "filled": 130372.28254806202,
+        "price": 1223.17,
+        "nav_after": 1172767.081036991
+      },
+      {
+        "date": "2026-07-01",
+        "action": "SELL",
+        "symbol": "002463",
+        "sell_all": true,
+        "decision_info_cutoff": "2026-06-30 15:00",
+        "execution_trigger_confirmed": "2026-07-01 next-day climax clear",
+        "skill": "§2.8",
+        "filled": 219472.50417117233,
+        "price": 145.01,
+        "nav_after": 1172767.0810369907
+      },
+      {
+        "date": "2026-07-01",
+        "action": "SELL",
+        "symbol": "512480",
+        "sell_all": true,
+        "decision_info_cutoff": "2026-06-30 15:00",
+        "execution_trigger_confirmed": "2026-07-01 next-day climax clear",
+        "skill": "§2.8",
+        "filled": 419244.70210320567,
+        "price": 1.472,
+        "nav_after": 1172767.0810369907
+      },
+      {
+        "date": "2026-07-01",
+        "action": "REBALANCE_DEFENSE",
+        "targets": {
+          "601288": 0.3,
+          "601318": 0.4
+        },
+        "decision_info_cutoff": "2026-06-30 15:00",
+        "execution_trigger_confirmed": "2026-07-01 cross-style",
+        "skill": "§2.8/§5.1",
+        "nav_after": 1172767.081036991,
+        "cash": 351830.1243110973,
+        "weights": {
+          "512480": 0.0,
+          "601288": 0.29999999999999993,
+          "601318": 0.39999999999999997,
+          "300308": 0.0,
+          "002463": 0.0
+        }
+      }
+    ]
+  }
+}

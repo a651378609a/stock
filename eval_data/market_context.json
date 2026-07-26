@@ -1,0 +1,11 @@
+{
+  "settlement_source": "stock-sdk-mcp get_stock_fund_flow_history.close",
+  "kline_status": "get_history_kline fetch failed on 2026-07-26 probe; fund-flow history close used instead (same MCP)",
+  "quotes_probe": "get_a_share_quotes sh000001=3814.2 sh600519=1297.41",
+  "search_probe": "agent-search free_search_news OK",
+  "training_window": "2026-01 to 2026-05",
+  "test_windows": [
+    "2026-06",
+    "2026-07-01..2026-07-24"
+  ]
+}

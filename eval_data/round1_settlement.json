@@ -1,0 +1,24 @@
+{
+  "round": 1,
+  "settlement_source": "stock-sdk-mcp get_stock_fund_flow_history.close",
+  "catalyst_tools": "agent-search-mcp free_search_news",
+  "skill_path_tested": "§2.8 Round1 wait-for-failure-confirm before full clear",
+  "june": {
+    "end": "2026-06-30",
+    "nav": 1198409.486674257,
+    "return_pct": 19.84
+  },
+  "july": {
+    "end": "2026-07-24",
+    "nav": 1190304.3432987542,
+    "return_pct": -0.68
+  },
+  "pass_nonneg": false,
+  "buy_hold_control": {
+    "june_ret_pct": 15.18,
+    "july_ret_pct": -17.02,
+    "june_nav": 1151782.530280584,
+    "july_nav": 955744.6347198521
+  },
+  "notes": "July fails because waiting for 7/2 failure confirm sells into deeper drawdown vs 7/1 next-day climax clear."
+}
